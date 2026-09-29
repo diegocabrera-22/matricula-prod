@@ -199,9 +199,19 @@ export const useMatriculas = () => {
     })
       .then(res => res.ok ? res.json() : Promise.reject())
       .then((data) => {
-        setOpcionesFiltro(data);
-        if (data.anios && data.anios.length > 0) {
-          const ultimoAnioRegistrado = String(data.anios[0]);
+        // Normalizar: garantizar que los campos usados con .map sean siempre arrays,
+        // aunque el backend devuelva null/objeto/campo ausente.
+        const normalizado = {
+          anios: Array.isArray(data?.anios) ? data.anios : [],
+          cursos: Array.isArray(data?.cursos) ? data.cursos : [],
+          planes: Array.isArray(data?.planes) ? data.planes : [],
+          cursos_por_plan: (data?.cursos_por_plan && typeof data.cursos_por_plan === 'object')
+            ? data.cursos_por_plan
+            : {},
+        };
+        setOpcionesFiltro(normalizado);
+        if (normalizado.anios.length > 0) {
+          const ultimoAnioRegistrado = String(normalizado.anios[0]);
           if (!anioInicializadoRef.current) {
             setFiltroAnio(ultimoAnioRegistrado);
             anioInicializadoRef.current = true;
@@ -219,31 +229,34 @@ export const useMatriculas = () => {
 
   // Lista completa de todos los años disponibles para el colegio seleccionado
   const aniosUnicos = useMemo(() => {
-    if (opcionesFiltro.anios && opcionesFiltro.anios.length > 0) {
+    if (Array.isArray(opcionesFiltro.anios) && opcionesFiltro.anios.length > 0) {
       return opcionesFiltro.anios;
     }
-    const anios = matriculas.map(m => m.anio_escolar).filter(Boolean);
+    const base = Array.isArray(matriculas) ? matriculas : [];
+    const anios = base.map(m => m.anio_escolar).filter(Boolean);
     return Array.from(new Set(anios)).sort((a, b) => b - a);
   }, [opcionesFiltro.anios, matriculas]);
 
   // Códigos de planes de estudio disponibles para el colegio
   const codigosUnicos = useMemo(() => {
-    if (opcionesFiltro.planes && opcionesFiltro.planes.length > 0) {
+    if (Array.isArray(opcionesFiltro.planes) && opcionesFiltro.planes.length > 0) {
       return opcionesFiltro.planes.map(p => p.codigo);
     }
-    const codigos = matriculas.map(m => m.cod_tipo_ensenanza).filter(cod => cod !== null);
+    const base = Array.isArray(matriculas) ? matriculas : [];
+    const codigos = base.map(m => m.cod_tipo_ensenanza).filter(cod => cod !== null);
     return Array.from(new Set(codigos)).sort();
   }, [opcionesFiltro.planes, matriculas]);
 
   // Cursos disponibles (filtrados por plan si se seleccionó uno)
   const cursosUnicos = useMemo(() => {
-    if (filtroCodigo && opcionesFiltro.cursos_por_plan?.[filtroCodigo]) {
+    if (filtroCodigo && Array.isArray(opcionesFiltro.cursos_por_plan?.[filtroCodigo])) {
       return opcionesFiltro.cursos_por_plan[filtroCodigo];
     }
-    if (opcionesFiltro.cursos && opcionesFiltro.cursos.length > 0) {
+    if (Array.isArray(opcionesFiltro.cursos) && opcionesFiltro.cursos.length > 0) {
       return opcionesFiltro.cursos;
     }
-    const cursos = matriculas.map(m => m.curso).filter(Boolean);
+    const base = Array.isArray(matriculas) ? matriculas : [];
+    const cursos = base.map(m => m.curso).filter(Boolean);
     return Array.from(new Set(cursos)).sort();
   }, [opcionesFiltro, filtroCodigo, matriculas]);
 
