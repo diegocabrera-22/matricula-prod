@@ -33,6 +33,19 @@ Estado: el sistema está DESPLEGADO y operativo en `https://matricula.slepvalpar
 - `.env` de producción en `backend/.env` (chmod 600). Contiene DATABASE_URL (pooler Supabase),
   DB_SCHEMA=matriculas, GOOGLE_CLIENT_ID, GOOGLE_HOSTED_DOMAIN, JWT_SECRET_KEY (aleatorio),
   ACCESS_TOKEN_EXPIRE_MINUTES, CORS_ORIGINS.
+- **CORS_ORIGINS es obligatorio en producción**: si falta, `config.py` cae al default de
+  localhost y el frontend queda BLOQUEADO por CORS. Debe listar los dominios reales:
+  `CORS_ORIGINS=https://matricula.slepvalparaiso.gob.cl,https://rgm.slepvalparaiso.gob.cl`.
+- **Nombres de variables (contrato config.py)**: el backend lee la clave JWT desde
+  `JWT_SECRET_KEY` (con fallback a `SECRET_KEY`). `DATABASE_URL` y `DB_SCHEMA` se leen del
+  entorno; si `DATABASE_URL` está definida, se usa en vez del host/user/pass sueltos y se fija
+  `search_path` a `DB_SCHEMA` (matriculas). Todo esto vive en `backend/config.py`.
+- **Almacenamiento de documentos** (`STORAGE_PROVIDER`, desde el consolidado de sep-2026):
+  - `local` (default): guarda en disco. Definir `STORAGE_LOCAL_DIR` a una ruta persistente
+    con permisos del usuario `bitnami` (ej. `backend/uploads`).
+  - `s3`: requiere `S3_ENDPOINT_URL`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`,
+    `S3_BUCKET_NAME`, `S3_REGION_NAME`. Sin credenciales válidas hace fallback a local.
+  - Límite de subida: `MAX_FILE_SIZE_BYTES` (default 5 MB).
 
 ## Nginx (server blocks)
 Ubicación: `/opt/bitnami/nginx/conf/server_blocks/`. Los nuestros:
@@ -53,13 +66,29 @@ Desde el servidor:
 cd /opt/bitnami/nginx/apps/matriculas
 git pull origin main
 # si cambió backend:
-cd backend && ./venv/bin/pip install -r requirements.txt && sudo systemctl restart matriculas-backend
+cd backend
+# 1. si hay variables nuevas en .env.example, agregarlas a backend/.env (ej. CORS_ORIGINS, config S3)
+./venv/bin/pip install -r requirements.txt
+# 2. correr migraciones idempotentes SI el deploy trae cambios de esquema/almacenamiento:
+./venv/bin/python apply_storage_migration.py   # columnas ruta_documento_resolucion / ruta_documento_tutor
+./venv/bin/python apply_indexes.py             # 5 índices de rendimiento
+sudo systemctl restart matriculas-backend
+sudo journalctl -u matriculas-backend -n 30    # verificar que arrancó sin ImportError
 # si cambió frontend:
 cd ../frontend-matriculas && npm ci && npm run build
 ```
 Nota: el `dist/` se sirve estático; tras rebuild no hace falta recargar Nginx. Cloudflare puede
 cachear; usar Ctrl+F5 o incógnito para ver cambios de HTML/favicon.
 
+### Scripts de migración de BD (en `backend/`)
+- `apply_storage_migration.py`: agrega `matricula.ruta_documento_resolucion` y
+  `apoderado.ruta_documento_tutor` (VARCHAR 500, nullable). Chequea antes de alterar → idempotente.
+- `apply_indexes.py`: crea 5 índices (`CREATE INDEX IF NOT EXISTS`) para auditoría, matrícula
+  y estudiante. Idempotente, seguro de re-ejecutar.
+- Ambos usan el pool de `database.py`, así que actúan sobre el schema `matriculas` (search_path).
+
 ## Dependencias de runtime del backend (aprendidas en deploy)
 `requirements.txt` DEBE incluir `requests` (lo usa google-auth) y `python-multipart`
 (lo usa FastAPI para Form/uploads). Faltaban y rompían el arranque en un venv limpio.
+Desde el consolidado de sep-2026 también incluye `boto3` (cliente S3 en `storage_service.py`);
+recordar `pip install -r requirements.txt` en el redeploy para traerlo.
