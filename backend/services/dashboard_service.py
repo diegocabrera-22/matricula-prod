@@ -31,8 +31,13 @@ def obtener_estadisticas_dashboard_db(establecimiento_id: int = None, anio: int 
 
         # --- DATA DEL AÑO SELECCIONADO ---
 
-        # ACTIVOS: COUNT(DISTINCT) para blindar ante duplicados históricos
-        cur.execute(f"SELECT COUNT(DISTINCT id_estudiante) FROM matricula WHERE estado IN ('Activa', 'Pendiente Retiro') {filtros_sql}", tuple(parametros))
+        # ACTIVOS:
+        # - Con año seleccionado: COUNT(DISTINCT id_estudiante) → un alumno con
+        #   matrícula en 2 colegios del SLEP en el MISMO año cuenta 1 vez.
+        # - Histórico (sin año): COUNT(*) de filas → suma las matrículas de todos
+        #   los años, para que la tarjeta cuadre con las barras del gráfico anual.
+        conteo_activos = "COUNT(DISTINCT id_estudiante)" if anio is not None else "COUNT(*)"
+        cur.execute(f"SELECT {conteo_activos} FROM matricula WHERE estado IN ('Activa', 'Pendiente Retiro') {filtros_sql}", tuple(parametros))
         total_activos = cur.fetchone()[0]
 
         # RETIROS NETOS: Alumnos con estado Retirado/Inactiva que NO tienen
@@ -54,9 +59,11 @@ def obtener_estadisticas_dashboard_db(establecimiento_id: int = None, anio: int 
                   )
             """, (establecimiento_id, anio, establecimiento_id, anio))
         elif establecimiento_id is not None:
-            # Sin filtro de año: compara por establecimiento y el mismo año de cada fila
+            # Sin filtro de año (histórico): cuenta retiros netos POR AÑO
+            # (DISTINCT id_estudiante, anio) para que la tarjeta cuadre con la suma
+            # de retiros de las barras del gráfico anual.
             cur.execute("""
-                SELECT COUNT(DISTINCT m.id_estudiante)
+                SELECT COUNT(DISTINCT (m.id_estudiante, m.anio_escolar))
                 FROM matricula m
                 WHERE m.estado IN ('Retirado', 'Inactiva')
                   AND m.id_establecimiento = %s
@@ -83,9 +90,10 @@ def obtener_estadisticas_dashboard_db(establecimiento_id: int = None, anio: int 
                   )
             """, (anio, anio))
         else:
-            # Sin filtros: comparación global por establecimiento+año
+            # Sin filtros (histórico global): retiros netos POR AÑO
+            # (DISTINCT id_estudiante, anio) para cuadrar con la suma del gráfico anual.
             cur.execute("""
-                SELECT COUNT(DISTINCT m.id_estudiante)
+                SELECT COUNT(DISTINCT (m.id_estudiante, m.anio_escolar))
                 FROM matricula m
                 WHERE m.estado IN ('Retirado', 'Inactiva')
                   AND m.id_estudiante NOT IN (
@@ -98,11 +106,14 @@ def obtener_estadisticas_dashboard_db(establecimiento_id: int = None, anio: int 
             """)
         total_inactivos = cur.fetchone()[0]
 
-        cur.execute(f"SELECT nivel_ensenanza, COUNT(DISTINCT id_estudiante) FROM matricula WHERE estado IN ('Activa', 'Pendiente Retiro') {filtros_sql} GROUP BY nivel_ensenanza ORDER BY nivel_ensenanza", tuple(parametros))
+        # Desglose por nivel y curso: usa el MISMO criterio de conteo que la tarjeta
+        # de activos (COUNT(*) en histórico, DISTINCT con año) para que los desgloses
+        # sumen el mismo total.
+        cur.execute(f"SELECT nivel_ensenanza, {conteo_activos} FROM matricula WHERE estado IN ('Activa', 'Pendiente Retiro') {filtros_sql} GROUP BY nivel_ensenanza ORDER BY nivel_ensenanza", tuple(parametros))
         por_nivel = [{"nombre": row[0] or "Sin Nivel", "cantidad": row[1]} for row in cur.fetchall()]
 
         # Desglose de cursos para ACTIVOS
-        cur.execute(f"SELECT curso, COUNT(DISTINCT id_estudiante) FROM matricula WHERE estado IN ('Activa', 'Pendiente Retiro') {filtros_sql} GROUP BY curso ORDER BY curso", tuple(parametros))
+        cur.execute(f"SELECT curso, {conteo_activos} FROM matricula WHERE estado IN ('Activa', 'Pendiente Retiro') {filtros_sql} GROUP BY curso ORDER BY curso", tuple(parametros))
         por_curso = [{"nombre": row[0] or "Sin Curso", "cantidad": row[1]} for row in cur.fetchall()]
 
         # Desglose de cursos para RETIROS NETOS
