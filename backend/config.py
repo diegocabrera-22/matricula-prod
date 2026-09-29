@@ -30,6 +30,14 @@ DB_CONFIG = {
     "client_encoding": DB_CLIENT_ENCODING
 }
 
+# Conexión por URL directa (pooler de Supabase en producción).
+# Si está definida, database.py la usa en lugar de DB_CONFIG (host/user/pass sueltos).
+DATABASE_URL = os.getenv("DATABASE_URL", None)
+
+# Esquema a fijar en el search_path (producción usa "matriculas").
+# Si es None, no se altera el search_path (útil en local sin el esquema creado).
+DB_SCHEMA = os.getenv("DB_SCHEMA", None)
+
 DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "2"))
 DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "20"))
 DB_POOL_TIMEOUT = float(os.getenv("DB_POOL_TIMEOUT", "10.0"))
@@ -37,7 +45,8 @@ DB_POOL_TIMEOUT = float(os.getenv("DB_POOL_TIMEOUT", "10.0"))
 # ==============================================================================
 # SEGURIDAD JWT
 # ==============================================================================
-SECRET_KEY = os.getenv("SECRET_KEY", "slep_valparaiso_clave_secreta_super_segura")
+# Acepta JWT_SECRET_KEY (nombre usado en el .env de producción) o SECRET_KEY.
+SECRET_KEY = os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY", "slep_valparaiso_clave_secreta_super_segura")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "120"))
 
