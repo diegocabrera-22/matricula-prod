@@ -634,23 +634,15 @@ export default function NuevaMatricula() {
                 <ChevronLeft size={18} /> Volver
               </button>
 
-              {formulario.metodo_firma === 'Digital' ? (
-                <button 
-                  type="button" 
-                  onClick={abrirPortalPrueba}
-                  className="flex items-center gap-2 px-8 py-2.5 bg-blue-700 hover:bg-blue-800 text-white rounded-lg font-black tracking-wide transition-all shadow-md hover:shadow-lg"
-                >
-                  Probar Portal del Apoderado
-                </button>
-              ) : (
-                <button 
-                  type="submit" 
-                  disabled={cargando} 
-                  className="flex items-center gap-2 px-8 py-2.5 bg-blue-700 hover:bg-blue-800 text-white rounded-lg font-black tracking-wide transition-all shadow-md hover:shadow-lg disabled:opacity-50"
-                >
-                  {cargando ? 'Procesando...' : 'Generar Documentos para Firma'}
-                </button>
-              )}
+              <button
+                type="submit"
+                disabled={cargando}
+                className="flex items-center gap-2 px-8 py-2.5 bg-blue-700 hover:bg-blue-800 text-white rounded-lg font-black tracking-wide transition-all shadow-md hover:shadow-lg disabled:opacity-50"
+              >
+                {cargando
+                  ? 'Procesando...'
+                  : (formulario.metodo_firma === 'Digital' ? 'Registrar y Enviar a Firma' : 'Generar Documentos para Firma')}
+              </button>
             </div>
           </div>
         )}
@@ -675,6 +667,8 @@ export default function NuevaMatricula() {
         metodoFirma={formulario.metodo_firma}
         generarComprobantePDF={generarComprobantePDF}
         onVolver={() => navigate('/matriculas')}
+        rutAlumno={estudiante?.run || estudiante?.run_ipe}
+        anioEscolar={formulario.anio_escolar}
       />
 
       {/* MODAL ADVERTENCIA DE SALIDA */}
