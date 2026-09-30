@@ -49,8 +49,23 @@ El sistema tiene DOS vías de login, ambas emiten un **JWT propio** del backend
 ## Variables de entorno de auth
 - Backend (`backend/.env`): `GOOGLE_CLIENT_ID`, `GOOGLE_HOSTED_DOMAIN=slepvalparaiso.cl`,
   `JWT_SECRET_KEY`, `ACCESS_TOKEN_EXPIRE_MINUTES`.
-- Frontend (`frontend-matriculas/.env.local`): `VITE_GOOGLE_CLIENT_ID` (mismo valor que el backend).
-- El Client ID debe ser IDÉNTICO en backend y frontend.
+- Frontend: `VITE_GOOGLE_CLIENT_ID`. En dev vive en `.env.local`; en producción en
+  `.env.production` (el servidor NO tiene `.env.local`). Vite prioriza `.env.local` sobre
+  `.env.production`, así que en local ese archivo gana.
+- El Client ID debe ser IDÉNTICO en backend y frontend:
+  `498300607567-edt5c28askolgncq8t2pg6o39lhnlb0f.apps.googleusercontent.com`.
+
+### Client ID en el frontend (NO hardcodear placeholder)
+- `src/app/main.tsx` lee el Client ID de `import.meta.env.VITE_GOOGLE_CLIENT_ID`, con
+  fallback al Client ID real. Vite lo hornea en el bundle EN EL BUILD (no en runtime):
+  tras cambiar el `.env` hay que re-`npm run build`.
+- Antecedente: `main.tsx` tenía hardcodeado `"AQUI_IRA_TU_CLIENT_ID_DE_GOOGLE..."`, lo que
+  ignoraba la variable y producía **Error 401 invalid_client** en el login de Google.
+  NO reintroducir un placeholder; mantener la lectura desde `VITE_GOOGLE_CLIENT_ID`.
+
+## Accesos otorgados (registro)
+- `mauricio.casanova@slepvalparaiso.cl` → `acceso_establecimiento` id_establecimiento=17
+  (Liceo Bicentenario Marítimo de Valparaíso, RBD 1520), rol `Colegio` (escritura).
 
 ## Seguridad pendiente (higiene)
 - El Client Secret de GCP y la `service_role` key de Supabase se expusieron durante la

@@ -17,14 +17,15 @@ Dominios objetivo (producción): `matricula.slepvalparaiso.gob.cl` y `rgm.slepva
 ### Tablas del schema `matriculas`
 | Tabla | Descripción |
 |---|---|
-| `estudiante` | ~34k estudiantes (run_ipe, nombres, fecha_nac, domicilio, id_apoderado_principal) |
-| `matricula` | ~91.7k matrículas (2022–2026). FK a estudiante, establecimiento, usuario, catálogos |
-| `apoderado` | Apoderados |
+| `estudiante` | ~34k estudiantes (run_ipe, nombres, fecha_nac, domicilio, dirección estructurada calle/numero/sector/comuna, id_apoderado_principal, id_apoderado_suplente, `fecha_actualizacion` TIMESTAMPTZ) |
+| `matricula` | ~91.7k matrículas (2022–2026). FK a estudiante, establecimiento, usuario, catálogos. Incluye `ruta_documento_resolucion` (resolución de sobrecupo) |
+| `apoderado` | Apoderados. Incluye `ruta_documento_tutor` |
+| `ficha_salud` | Ficha médica del estudiante (FK id_estudiante). Tiene su propia `fecha_actualizacion` — NO confundir con la de `estudiante` |
 | `establecimiento` | 66 colegios. Columna `slep_establecimiento_id` enlaza (FK) a `public.slep_establecimientos` por RBD |
 | `catalogo_grado` | Catálogo de grados |
 | `catalogo_tipo_ensenanza` | Catálogo de tipos de enseñanza |
-| `usuario` | Usuarios del sistema (email, nombre, rol, id_establecimiento, activo, password_hash) |
-| `acceso_establecimiento` | Control de acceso Google: correo → id_establecimiento → rol (multi-funcionario por colegio) |
+| `usuario` | Usuarios del sistema. Correo en `email_institucional` (NO `email`), más nombre, rol, id_establecimiento, activo, password_hash |
+| `acceso_establecimiento` | Control de acceso Google: `correo` → `id_establecimiento` → `rol`, con `es_principal`, `activo` (multi-funcionario por colegio) |
 | `auditoria_matricula` | Bitácora (creada vacía; los ~284k históricos del backup NO se migraron) |
 
 ### Convenciones de datos importantes
@@ -44,3 +45,11 @@ Dominios objetivo (producción): `matricula.slepvalparaiso.gob.cl` y `rgm.slepva
 - Está instalado el power `supabase-hosted`. Usar `project_id = gyhihuovussdauehmeuk`.
 - Para DDL usar `apply_migration`; para consultas `execute_sql`.
 - Al crear/modificar tablas del sistema, hacerlo SIEMPRE en el schema `matriculas`.
+
+## Migraciones de esquema versionadas (backend/)
+- `apply_storage_migration.py`: agrega columnas idempotentemente —
+  `matricula.ruta_documento_resolucion`, `apoderado.ruta_documento_tutor` y
+  `estudiante.fecha_actualizacion` (esta última faltaba y rompía GET /estudiante/{rut} con 500).
+- `apply_indexes.py`: crea índices de rendimiento (idempotente).
+- Regla: cualquier columna nueva que el código asuma DEBE quedar en uno de estos scripts,
+  no aplicarse solo a mano en Supabase. Correrlos en cada deploy que toque el esquema.

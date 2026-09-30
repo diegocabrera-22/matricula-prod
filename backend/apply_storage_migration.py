@@ -45,6 +45,26 @@ def migrate():
         else:
             print("Column 'ruta_documento_tutor' already exists.")
 
+        # Columna de auditoria en 'estudiante': el backend la lee (ficha) y escribe
+        # (UPDATE al editar). Su ausencia causaba error 500 en GET /estudiante/{rut}.
+        print("Checking table 'estudiante' for 'fecha_actualizacion'...")
+        cur.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'estudiante' AND column_name = 'fecha_actualizacion';
+        """)
+        exists_fecha_est = cur.fetchone()
+        if not exists_fecha_est:
+            print("Adding column 'fecha_actualizacion' to 'estudiante'...")
+            cur.execute("""
+                ALTER TABLE estudiante
+                ADD COLUMN fecha_actualizacion TIMESTAMPTZ DEFAULT now();
+            """)
+            conn.commit()
+            print("Successfully added 'fecha_actualizacion' to 'estudiante'.")
+        else:
+            print("Column 'fecha_actualizacion' already exists.")
+
     except Exception as e:
         conn.rollback()
         print(f"Error during migration: {e}")
