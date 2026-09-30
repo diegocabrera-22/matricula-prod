@@ -1,10 +1,13 @@
 """
 apply_firma_migration.py
-Crea la infraestructura de firma de matrícula (integración con SIMPLE):
-- Tabla matriculas.firma_matricula (1 fila por matrícula: solicitud + resultado de firma).
-- Columna matricula.estado_firma (badge de estado en la grilla).
+Infraestructura de firma de matrícula (integración con SIMPLE + Clave Única).
 
-Idempotente: usa CREATE TABLE/INDEX IF NOT EXISTS y ADD COLUMN IF NOT EXISTS.
+Crea/asegura de forma idempotente:
+- Tabla matriculas.firma_matricula (1 fila por firma; upsert por simple_tramite_id).
+- Columnas de firma en matriculas.matricula (estado_firma y respuestas materializadas).
+- Función SQL matriculas.buscar_matricula_por_rut(text, integer) (usada por la Edge Function).
+
+Refleja la realidad desplegada en producción (Edge Function sync-matricula v final).
 Actúa sobre el schema 'matriculas' vía el search_path del pool de database.py.
 """
 import sys
@@ -21,6 +24,10 @@ CREATE TABLE IF NOT EXISTS firma_matricula (
     rut_alumno         VARCHAR(20),
     rut_apoderado      VARCHAR(20),
     rut_firmante       VARCHAR(20),
+    nombre_firmante    VARCHAR(200),
+    nombres_firmante   VARCHAR(150),
+    apellidos_firmante VARCHAR(150),
+    email_firmante     VARCHAR(150),
     anio_escolar       INTEGER,
     estado             VARCHAR(20) NOT NULL DEFAULT 'pendiente',
     metodo             VARCHAR(30) DEFAULT 'clave_unica_simple',
@@ -33,13 +40,65 @@ CREATE TABLE IF NOT EXISTS firma_matricula (
 );
 """
 
+# Columnas que pueden faltar si la tabla ya existía de una versión anterior.
+DDL_COLS_FIRMA = [
+    "ALTER TABLE firma_matricula ADD COLUMN IF NOT EXISTS nombre_firmante VARCHAR(200);",
+    "ALTER TABLE firma_matricula ADD COLUMN IF NOT EXISTS nombres_firmante VARCHAR(150);",
+    "ALTER TABLE firma_matricula ADD COLUMN IF NOT EXISTS apellidos_firmante VARCHAR(150);",
+    "ALTER TABLE firma_matricula ADD COLUMN IF NOT EXISTS email_firmante VARCHAR(150);",
+]
+
 DDL_INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_firma_matricula_id_mat ON firma_matricula(id_matricula);",
     "CREATE INDEX IF NOT EXISTS idx_firma_matricula_tramite ON firma_matricula(simple_tramite_id);",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_firma_matricula_tramite ON firma_matricula(simple_tramite_id) WHERE simple_tramite_id IS NOT NULL;",
 ]
 
-DDL_COLUMNA_ESTADO = "ALTER TABLE matricula ADD COLUMN IF NOT EXISTS estado_firma VARCHAR(20) DEFAULT 'sin_firma';"
+# Columnas de firma materializadas en la matrícula (para grilla / lectura rápida).
+DDL_COLS_MATRICULA = [
+    "ALTER TABLE matricula ADD COLUMN IF NOT EXISTS estado_firma VARCHAR(20) DEFAULT 'sin_firma';",
+    "ALTER TABLE matricula ADD COLUMN IF NOT EXISTS metodo_firma VARCHAR(30);",
+    "ALTER TABLE matricula ADD COLUMN IF NOT EXISTS opcion_religion VARCHAR(30);",
+    "ALTER TABLE matricula ADD COLUMN IF NOT EXISTS acepta_compromiso BOOLEAN;",
+    "ALTER TABLE matricula ADD COLUMN IF NOT EXISTS autoriza_entrevista BOOLEAN;",
+    "ALTER TABLE matricula ADD COLUMN IF NOT EXISTS autoriza_imagen BOOLEAN;",
+]
+
+# Función que ubica la matrícula por RUT del alumno (normaliza) + año opcional.
+# SECURITY DEFINER: la Edge Function la invoca vía RPC.
+DDL_FUNCION = """
+CREATE OR REPLACE FUNCTION buscar_matricula_por_rut(p_rut text, p_anio integer DEFAULT NULL)
+RETURNS TABLE(
+    id_estudiante integer,
+    id_apoderado_principal integer,
+    id_apoderado_suplente integer,
+    id_matricula integer,
+    anio_escolar integer,
+    id_establecimiento integer,
+    estado character varying
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path TO 'matriculas'
+AS $function$
+  WITH norm AS (
+    SELECT upper(regexp_replace(p_rut, '[.\\-\\s]', '', 'g')) AS rut
+  ),
+  est AS (
+    SELECT e.id_estudiante, e.id_apoderado_principal, e.id_apoderado_suplente
+    FROM matriculas.estudiante e, norm
+    WHERE upper(regexp_replace(e.run_ipe, '[.\\-\\s]', '', 'g')) = norm.rut
+    LIMIT 1
+  )
+  SELECT est.id_estudiante, est.id_apoderado_principal, est.id_apoderado_suplente,
+         m.id_matricula, m.anio_escolar, m.id_establecimiento, m.estado
+  FROM est
+  JOIN matriculas.matricula m ON m.id_estudiante = est.id_estudiante
+  WHERE (p_anio IS NULL OR m.anio_escolar = p_anio)
+  ORDER BY m.anio_escolar DESC
+  LIMIT 1;
+$function$;
+"""
 
 
 def migrate():
@@ -49,12 +108,20 @@ def migrate():
         print("Creando tabla 'firma_matricula' (si no existe)...")
         cur.execute(DDL_TABLA)
 
+        for ddl in DDL_COLS_FIRMA:
+            cur.execute(ddl)
+        print("Columnas de firmante en 'firma_matricula' aseguradas.")
+
         for ddl in DDL_INDICES:
             cur.execute(ddl)
         print("Índices de 'firma_matricula' asegurados.")
 
-        print("Agregando columna 'estado_firma' a 'matricula' (si no existe)...")
-        cur.execute(DDL_COLUMNA_ESTADO)
+        for ddl in DDL_COLS_MATRICULA:
+            cur.execute(ddl)
+        print("Columnas de firma en 'matricula' aseguradas.")
+
+        print("Creando/actualizando función 'buscar_matricula_por_rut'...")
+        cur.execute(DDL_FUNCION)
 
         conn.commit()
         print("Migración de firma aplicada exitosamente.")
