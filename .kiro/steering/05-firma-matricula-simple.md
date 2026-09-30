@@ -64,6 +64,24 @@ Primero el **funcionario** deja la matrícula OK (fila en `matricula` con `id_es
 solo firma en SIMPLE. Prerrequisito para no dar 404/409: alumno con matrícula del año y su
 apoderado principal (con `rut_pasaporte`) cargado.
 
+## Frontend — cómo se envía a firma (implementado)
+En `NuevaMatricula.tsx` (paso 3), método **Digital**:
+- El botón "Registrar y Enviar a Firma" ejecuta `handleSubmit` → guarda la matrícula con
+  `estado 'Pendiente Firma'` y `metodo_firma='Digital'` (NO abre ya el prototipo).
+- Tras guardar, `ModalExito` (en modo Digital) muestra:
+  - **Código QR** de la URL de SIMPLE (dependencia `qrcode.react`) para escanear con el celular.
+  - Enlace copiable y el **RUT del alumno + año** (SIMPLE no los pre-carga: el apoderado
+    los escribe a mano; debe saber el RUT del pupilo).
+- **URL de firma en SIMPLE** (constante `URL_FIRMA_SIMPLE` en `ModalExito.tsx`):
+  `https://tramites.slepvalparaiso.gob.cl/login/claveunica?redirect=https://tramites.slepvalparaiso.gob.cl/tramites/iniciar/27`
+  Si cambia el número de trámite (27), actualizar esa constante.
+- La firma es acto personal del apoderado (su celular / su Clave Única). El PC del
+  funcionario NO debe usarse para firmar por él; para quien no tiene celular está el método
+  **Manual (Papel)**.
+- El prototipo `/firma-prueba` (`PortalFirmaApoderado`) se mantiene solo para demos; ya no
+  es parte del flujo real. Quedó código muerto `abrirPortalPrueba` en `NuevaMatricula.tsx`
+  (no rompe; `noUnusedLocals=false`), pendiente de limpiar.
+
 ## Prototipos versionados
 - `.kiro/prototipos/matricula_post_js.js`: el JS que se pega en SIMPLE (reemplazar ANON y token).
 - `.kiro/prototipos/sync-matricula-index.ts`: copia de referencia de la Edge Function.
@@ -76,5 +94,11 @@ apoderado principal (con `rut_pasaporte`) cargado.
 - `url_pdf_firmado` llega vacío: falta definir en SIMPLE cómo exponer la URL del PDF firmado.
 - Año estricto vs flexible: hoy exige año con matrícula (404 si no). Decisión pendiente.
 - Evento `ingreso`: soportado pero no cableado en el formulario.
-- Setear/rotar `SIMPLE_API_TOKEN` (secret de la función); rotar anon/service_role expuestas.
-- Frontend: mostrar el badge `estado_firma` en la grilla y el link/QR al trámite de SIMPLE.
+- El token real ya está seteado en Supabase y el flujo fue probado end-to-end OK. Higiene:
+  evaluar token propio de matrícula (hoy comparte `SIMPLE_API_TOKEN` con OIRS) y rotar
+  anon/service_role expuestas durante la configuración.
+- **Frontend: mostrar el badge `estado_firma` en la grilla de matrículas** (aún NO hecho;
+  el envío a firma con QR/link SÍ está hecho, ver sección Frontend).
+- Robustez futura: como SIMPLE no pre-carga datos, el riesgo es un typo del RUT del alumno.
+  La mejora sería un `token_tramite` opaco por matrícula, pero requiere que SIMPLE acepte
+  parámetros por URL (hoy no). Limpiar el código muerto `abrirPortalPrueba`.
