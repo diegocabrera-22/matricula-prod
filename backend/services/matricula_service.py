@@ -118,56 +118,56 @@ def obtener_todas_matriculas_db(
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        base_tables = """
+        base_where = """
             FROM matricula m
             INNER JOIN estudiante e ON m.id_estudiante = e.id_estudiante
             LEFT JOIN apoderado a ON e.id_apoderado_principal = a.id_apoderado
             LEFT JOIN catalogo_tipo_ensenanza cte ON m.cod_tipo_ensenanza = cte.codigo
             INNER JOIN establecimiento est ON m.id_establecimiento = est.id_establecimiento
+            WHERE 1=1
         """
-        where_clause = "WHERE 1=1"
         parametros = []
 
         if establecimiento_id is not None:
-            where_clause += " AND m.id_establecimiento = %s"
+            base_where += " AND m.id_establecimiento = %s"
             parametros.append(establecimiento_id)
 
         if anio is not None:
-            where_clause += " AND m.anio_escolar = %s"
+            base_where += " AND m.anio_escolar = %s"
             parametros.append(anio)
 
         if codigo is not None:
-            where_clause += " AND m.cod_tipo_ensenanza = %s"
+            base_where += " AND m.cod_tipo_ensenanza = %s"
             parametros.append(codigo)
 
         if curso:
-            where_clause += " AND m.curso = %s"
+            base_where += " AND m.curso = %s"
             parametros.append(curso)
 
         if estado and estado.strip():
             est_clean = estado.strip().lower()
             if est_clean in ['inactiva', 'retirado', 'retirada', 'inactivo']:
-                where_clause += " AND (m.estado IN ('Inactiva', 'Retirado', 'Retirada', 'Inactivo') OR m.fecha_retiro IS NOT NULL)"
+                base_where += " AND (m.estado IN ('Inactiva', 'Retirado', 'Retirada', 'Inactivo') OR m.fecha_retiro IS NOT NULL)"
             elif est_clean in ['traslado', 'traslados', 'trasladado', 'trasladados']:
-                where_clause += " AND (m.motivo_retiro ILIKE '%%Traslado%%' OR m.observaciones ILIKE '%%traslado%%')"
+                base_where += " AND (m.motivo_retiro ILIKE '%%Traslado%%' OR m.observaciones ILIKE '%%traslado%%')"
             elif est_clean in ['pendiente_traslado']:
-                where_clause += " AND m.motivo_cambio_curso LIKE %s"
+                base_where += " AND m.motivo_cambio_curso LIKE %s"
                 parametros.append("PENDIENTE_TRASLADO%")
             elif est_clean in ['pendiente retiro', 'pendiente_retiro']:
-                where_clause += " AND m.estado = %s"
+                base_where += " AND m.estado = %s"
                 parametros.append("Pendiente Retiro")
             elif est_clean in ['activa', 'activo']:
-                where_clause += " AND m.estado = %s AND m.fecha_retiro IS NULL"
+                base_where += " AND m.estado = %s AND m.fecha_retiro IS NULL"
                 parametros.append("Activa")
             else:
-                where_clause += " AND m.estado = %s"
+                base_where += " AND m.estado = %s"
                 parametros.append(estado.strip())
 
         if busqueda and busqueda.strip():
             tokens = busqueda.strip().split()
             for token in tokens:
                 like = f"%{token}%"
-                where_clause += """ AND (
+                base_where += """ AND (
                     e.nombres ILIKE %s OR e.apellido_paterno ILIKE %s OR
                     e.run_ipe ILIKE %s OR
                     a.nombres ILIKE %s OR a.apellido_paterno ILIKE %s OR
@@ -176,7 +176,7 @@ def obtener_todas_matriculas_db(
                 parametros.extend([like, like, like, like, like, like])
 
         # COUNT query
-        cur.execute(f"SELECT COUNT(*) {base_tables} {where_clause}", tuple(parametros))
+        cur.execute(f"SELECT COUNT(*) {base_where}", tuple(parametros))
         total = cur.fetchone()[0]
 
         # Data query
@@ -186,16 +186,8 @@ def obtener_todas_matriculas_db(
                    e.run_ipe, e.nombres, e.apellido_paterno, a.rut_pasaporte, a.nombres, a.apellido_paterno,
                    m.anio_escolar, cte.descripcion, est.rbd, m.cod_tipo_ensenanza, m.id_establecimiento,
                    m.es_excedente, m.numero_resolucion_excedente, m.fecha_resolucion_excedente, m.ruta_documento_resolucion,
-                   m.motivo_cambio_curso, m.ruta_documento_traslado, m.motivo_retiro, m.fecha_retiro, m.observaciones,
-                   er.respuestas_confidenciales
-            {base_tables}
-            LEFT JOIN LATERAL (
-                SELECT respuestas_confidenciales
-                FROM encuesta_retiro
-                WHERE id_matricula = m.id_matricula
-                ORDER BY id_encuesta DESC LIMIT 1
-            ) er ON true
-            {where_clause}
+                   m.motivo_cambio_curso, m.ruta_documento_traslado, m.motivo_retiro, m.fecha_retiro, m.observaciones
+            {base_where}
             ORDER BY m.id_matricula DESC
             LIMIT %s OFFSET %s
         """
@@ -215,8 +207,7 @@ def obtener_todas_matriculas_db(
             "ruta_documento_traslado": f[22],
             "motivo_retiro": f[23],
             "fecha_retiro": str(f[24]) if f[24] else None,
-            "observaciones": f[25],
-            "detalle_retiro_encuesta": f[26]
+            "observaciones": f[25]
         } for f in cur.fetchall()]
 
         import math
@@ -1622,4 +1613,209 @@ def exportar_matriculas_excel_service(id_establecimiento: int = None, anio: str 
     finally:
         cur.close()
         conn.close()
+
+def parsear_texto_motivo(texto: str):
+    if not texto:
+        return [], ""
+    
+    motivos = []
+    detalle = ""
+    
+    # Si contiene [Motivos ...]: o [Detalles ...]:
+    if "[Motivos" in texto or "[Detalles" in texto:
+        m_motivos = re.search(r"\[Motivos[^\]]*\]:\s*(.*?)(?=\n\s*\[Detalles|\Z)", texto, re.DOTALL | re.IGNORECASE)
+        if m_motivos:
+            bloque = m_motivos.group(1).strip()
+            for linea in bloque.splitlines():
+                l = re.sub(r'^[•\-\*\s]+', '', linea).strip()
+                if l:
+                    motivos.append(l)
+        
+        m_detalles = re.search(r"\[Detalles[^\]]*\]:\s*(.*)", texto, re.DOTALL | re.IGNORECASE)
+        if m_detalles:
+            detalle = m_detalles.group(1).strip()
+    else:
+        detalle = texto.strip()
+        
+    return motivos, detalle
+
+def parsear_traslado_info(motivo_cambio: str, observaciones: str):
+    curso_origen = None
+    folio_origen = None
+    
+    if motivo_cambio:
+        m1 = re.search(r"(?:desde|De)\s*['\"]([^'\"]+)['\"]", motivo_cambio, re.IGNORECASE)
+        if m1:
+            curso_origen = m1.group(1).strip()
+        m2 = re.search(r"Folio(?:\s+anterior)?:\s*#?(\d+)", motivo_cambio, re.IGNORECASE)
+        if m2:
+            try:
+                folio_origen = int(m2.group(1))
+            except Exception:
+                pass
+            
+    if not curso_origen and observaciones:
+        m3 = re.search(r"(?:desde|De)\s*['\"]([^'\"]+)['\"]", observaciones, re.IGNORECASE)
+        if m3:
+            curso_origen = m3.group(1).strip()
+    if not folio_origen and observaciones:
+        m4 = re.search(r"De\s*['\"][^'\"]+['\"]\s*\(Folio\s*#?(\d+)\)", observaciones, re.IGNORECASE)
+        if m4:
+            try:
+                folio_origen = int(m4.group(1))
+            except Exception:
+                pass
+        else:
+            m5 = re.search(r"Folio(?:\s+anterior)?:\s*#?(\d+)", observaciones, re.IGNORECASE)
+            if m5:
+                try:
+                    folio_origen = int(m5.group(1))
+                except Exception:
+                    pass
+            
+    return curso_origen, folio_origen
+
+def obtener_detalle_motivo_matricula_db(id_matricula: int, usuario_actual: dict = None):
+    """
+    Obtiene los motivos detallados de retiro (incluyendo respuestas confidenciales de la encuesta)
+    o de cambio de curso (traslado de sala con justificación), garantizando control de acceso por colegio.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT m.id_matricula, m.numero_correlativo, m.anio_escolar, m.nivel_ensenanza, m.curso,
+                   m.fecha_matricula, m.estado, m.fecha_retiro, m.motivo_retiro, m.motivo_cambio_curso,
+                   m.observaciones, m.id_establecimiento,
+                   e.id_estudiante, e.run_ipe, e.nombres, e.apellido_paterno, e.apellido_materno,
+                   est.nombre, est.rbd,
+                   a.rut_pasaporte, a.nombres, a.apellido_paterno, a.apellido_materno,
+                   a.correo_electronico, a.telefono
+            FROM matricula m
+            INNER JOIN estudiante e ON m.id_estudiante = e.id_estudiante
+            INNER JOIN establecimiento est ON m.id_establecimiento = est.id_establecimiento
+            LEFT JOIN apoderado a ON e.id_apoderado_principal = a.id_apoderado
+            WHERE m.id_matricula = %s
+        """, (id_matricula,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Matrícula no encontrada.")
+
+        id_establecimiento = row[11]
+        if usuario_actual and usuario_actual.get("rol") in ["Colegio", "Visualizador_Colegio"]:
+            id_est_user = usuario_actual.get("id_establecimiento")
+            if id_est_user and id_establecimiento != id_est_user:
+                raise HTTPException(status_code=403, detail="No tiene permisos para ver detalles de matrículas de otro establecimiento.")
+
+        # Consultar encuesta de retiro si existe
+        encuesta_row = None
+        try:
+            cur.execute("""
+                SELECT fecha_respuesta, respuestas_confidenciales
+                FROM encuesta_retiro
+                WHERE id_matricula = %s
+                ORDER BY id_encuesta DESC
+                LIMIT 1
+            """, (id_matricula,))
+            encuesta_row = cur.fetchone()
+        except Exception:
+            # En caso de que la tabla aún no exista en algún ambiente aislado
+            conn.rollback()
+
+        estado = row[6] or ""
+        fecha_retiro = row[7]
+        motivo_retiro = row[8]
+        motivo_cambio = row[9]
+        observaciones = row[10] or ""
+
+        # Retiro
+        aplica_retiro = (
+            estado.lower() in ["retirado", "retirada", "inactiva", "inactivo", "pendiente retiro"] 
+            or fecha_retiro is not None 
+            or bool(motivo_retiro)
+            or bool(encuesta_row)
+        )
+        
+        tiene_encuesta = False
+        fecha_encuesta = None
+        motivos_retiro = []
+        detalle_retiro = ""
+
+        if encuesta_row:
+            tiene_encuesta = True
+            fecha_encuesta = str(encuesta_row[0]) if encuesta_row[0] else None
+            motivos_retiro, detalle_retiro = parsear_texto_motivo(encuesta_row[1])
+        elif motivo_retiro:
+            motivos_retiro, detalle_retiro = parsear_texto_motivo(motivo_retiro)
+            if not detalle_retiro and motivo_retiro:
+                detalle_retiro = motivo_retiro
+
+        # Cambio de curso
+        curso_origen, folio_origen = parsear_traslado_info(motivo_cambio, observaciones)
+        aplica_cambio = (
+            (bool(motivo_cambio) and not motivo_cambio.startswith("PENDIENTE_TRASLADO"))
+            or bool(curso_origen)
+            or "traslado formalizado" in observaciones.lower()
+        )
+
+        motivos_cambio = []
+        detalle_cambio = ""
+        if motivo_cambio and not motivo_cambio.startswith("PENDIENTE_TRASLADO"):
+            motivos_cambio, detalle_cambio = parsear_texto_motivo(motivo_cambio)
+            if not detalle_cambio and not motivos_cambio:
+                detalle_cambio = motivo_cambio
+
+        nombre_est = f"{row[14] or ''} {row[15] or ''} {row[16] or ''}".strip()
+        nombre_apod = f"{row[20] or ''} {row[21] or ''} {row[22] or ''}".strip() or "Sin registro"
+
+        return {
+            "id_matricula": row[0],
+            "numero_correlativo": row[1],
+            "anio_escolar": row[2],
+            "nivel_ensenanza": row[3],
+            "curso": row[4],
+            "fecha_matricula": str(row[5]) if row[5] else None,
+            "estado": estado,
+            "estudiante": {
+                "id_estudiante": row[12],
+                "rut": row[13],
+                "nombre_completo": nombre_est,
+                "curso": row[4],
+                "nivel_ensenanza": row[3],
+                "establecimiento": row[17],
+                "rbd": row[18],
+                "id_establecimiento": id_establecimiento
+            },
+            "apoderado": {
+                "rut": row[19] or "Sin registro",
+                "nombre_completo": nombre_apod,
+                "correo": row[23] or "Sin registro",
+                "telefono": row[24] or "Sin registro"
+            },
+            "retiro": {
+                "aplica": aplica_retiro,
+                "fecha_retiro": str(fecha_retiro) if fecha_retiro else None,
+                "motivo_oficial": motivo_retiro or ("Respuesta Apoderado (Confidencial)" if tiene_encuesta else "Sin motivo registrado"),
+                "tiene_encuesta": tiene_encuesta,
+                "fecha_encuesta": fecha_encuesta,
+                "motivos_seleccionados": motivos_retiro,
+                "detalle_adicional": detalle_retiro,
+                "observaciones": observaciones
+            },
+            "cambio_curso": {
+                "aplica": aplica_cambio,
+                "curso_actual": row[4],
+                "curso_anterior": curso_origen,
+                "folio_actual": row[1],
+                "folio_anterior": folio_origen,
+                "motivo_crudo": motivo_cambio,
+                "motivos_seleccionados": motivos_cambio,
+                "detalle_adicional": detalle_cambio,
+                "observaciones": observaciones
+            }
+        }
+    finally:
+        cur.close()
+        conn.close()
+
 

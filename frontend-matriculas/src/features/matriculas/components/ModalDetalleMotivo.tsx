@@ -1,358 +1,453 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
-  X, 
-  FileText, 
-  UserMinus, 
-  ArrowRightLeft, 
-  Calendar, 
-  School, 
-  User, 
-  CheckCircle2, 
-  AlertCircle, 
-  MessageSquareQuote,
-  ExternalLink 
+  X, AlertCircle, Calendar, User, Mail, Phone, ArrowRight, 
+  ClipboardList, Building2, CheckCircle2, ShieldAlert, FileText, Loader2
 } from 'lucide-react';
-import type { Matricula } from '../hooks/useMatriculas';
 import { API_BASE_URL } from '../../../config/api';
+
+export interface DetalleMotivoResponse {
+  id_matricula: number;
+  numero_correlativo: number;
+  anio_escolar: number;
+  nivel_ensenanza: string;
+  curso: string;
+  fecha_matricula: string | null;
+  estado: string;
+  estudiante: {
+    id_estudiante: number;
+    rut: string;
+    nombre_completo: string;
+    curso: string;
+    nivel_ensenanza: string;
+    establecimiento: string;
+    rbd: string;
+    id_establecimiento: number;
+  };
+  apoderado: {
+    rut: string;
+    nombre_completo: string;
+    correo: string;
+    telefono: string;
+  };
+  retiro: {
+    aplica: boolean;
+    fecha_retiro: string | null;
+    motivo_oficial: string;
+    tiene_encuesta: boolean;
+    fecha_encuesta: string | null;
+    motivos_seleccionados: string[];
+    detalle_adicional: string;
+    observaciones: string;
+  };
+  cambio_curso: {
+    aplica: boolean;
+    curso_actual: string;
+    curso_anterior: string | null;
+    folio_actual: number;
+    folio_anterior: number | null;
+    motivo_crudo: string | null;
+    motivos_seleccionados: string[];
+    detalle_adicional: string;
+    observaciones: string;
+  };
+}
 
 interface ModalDetalleMotivoProps {
   isOpen: boolean;
   onClose: () => void;
-  tipo: 'retiro' | 'cambio_curso';
-  matricula: Matricula | null;
-  onEmitirRetiro?: (idMatricula: number) => void;
+  idMatricula: number | null;
+  modoInicial?: 'retiro' | 'cambio_curso';
+  onAbrirCertificado?: (idMatricula: number, tipo: 'RETIRO' | 'CAMBIO_CURSO' | 'MATRICULA') => void;
 }
 
-interface MotivoParsed {
-  motivos: string[];
-  detallesAdicionales: string;
-  textoCrudo: string;
-}
-
-export function parsearMotivoTexto(rawText: string | null | undefined): MotivoParsed {
-  if (!rawText || !rawText.trim()) {
-    return { motivos: [], detallesAdicionales: '', textoCrudo: '' };
-  }
-
-  const texto = rawText.trim();
-  const motivos: string[] = [];
-  let detallesAdicionales = '';
-
-  const regexMotivos = /\[Motivos[^\]]*\]:\s*([\s\S]*?)(?=\n\s*\[Detalles Adicionales\]:|$)/i;
-  const regexDetalles = /\[Detalles Adicionales\]:\s*([\s\S]*)$/i;
-
-  const matchMotivos = texto.match(regexMotivos);
-  const matchDetalles = texto.match(regexDetalles);
-
-  if (matchMotivos && matchMotivos[1]) {
-    const lineas = matchMotivos[1].split('\n');
-    for (const linea of lineas) {
-      const limpia = linea.replace(/^[\s•\-\*]+/, '').trim();
-      if (limpia) {
-        motivos.push(limpia);
-      }
-    }
-  }
-
-  if (matchDetalles && matchDetalles[1]) {
-    detallesAdicionales = matchDetalles[1].trim();
-  }
-
-  if (motivos.length === 0 && !detallesAdicionales) {
-    return {
-      motivos: [],
-      detallesAdicionales: '',
-      textoCrudo: texto,
-    };
-  }
-
-  return {
-    motivos,
-    detallesAdicionales,
-    textoCrudo: texto,
-  };
-}
-
-export const ModalDetalleMotivo: React.FC<ModalDetalleMotivoProps> = ({
+export default function ModalDetalleMotivo({
   isOpen,
   onClose,
-  tipo,
-  matricula,
-  onEmitirRetiro,
-}) => {
-  if (!isOpen || !matricula) return null;
+  idMatricula,
+  modoInicial = 'retiro',
+  onAbrirCertificado
+}: ModalDetalleMotivoProps) {
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [datos, setDatos] = useState<DetalleMotivoResponse | null>(null);
+  const [tabActiva, setTabActiva] = useState<'retiro' | 'cambio_curso'>(modoInicial);
 
-  const esRetiro = tipo === 'retiro';
+  useEffect(() => {
+    if (!isOpen || !idMatricula) {
+      setDatos(null);
+      setError(null);
+      return;
+    }
 
-  // Parse according to type
-  const parsedRetiro = esRetiro 
-    ? parsearMotivoTexto(matricula.detalle_retiro_encuesta || matricula.motivo_retiro)
-    : { motivos: [], detallesAdicionales: '', textoCrudo: '' };
+    setTabActiva(modoInicial);
+    setCargando(true);
+    setError(null);
 
-  const parsedCambio = !esRetiro 
-    ? parsearMotivoTexto(matricula.motivo_cambio_curso)
-    : { motivos: [], detallesAdicionales: '', textoCrudo: '' };
+    const token = localStorage.getItem('token');
+    fetch(`${API_BASE_URL}/matriculas/${idMatricula}/detalle-motivo`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || 'No se pudieron cargar los detalles del motivo.');
+        }
+        return res.json();
+      })
+      .then((data: DetalleMotivoResponse) => {
+        setDatos(data);
+        // Si el modo inicial no aplica pero el otro sí, cambiar tab automáticamente
+        if (modoInicial === 'retiro' && !data.retiro.aplica && data.cambio_curso.aplica) {
+          setTabActiva('cambio_curso');
+        } else if (modoInicial === 'cambio_curso' && !data.cambio_curso.aplica && data.retiro.aplica) {
+          setTabActiva('retiro');
+        }
+      })
+      .catch((err: any) => {
+        setError(err.message || 'Error de conexión con el servidor.');
+      })
+      .finally(() => {
+        setCargando(false);
+      });
+  }, [isOpen, idMatricula, modoInicial]);
 
-  const token = localStorage.getItem('token');
+  if (!isOpen) return null;
 
   return (
-    <div 
-      className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
-      onClick={onClose}
-    >
-      <div 
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* ENCABEZADO */}
-        <div className={`p-5 border-b flex items-start justify-between ${
-          esRetiro 
-            ? 'bg-gradient-to-r from-rose-50 via-amber-50 to-orange-50 border-rose-200' 
-            : 'bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 border-blue-200'
-        }`}>
-          <div className="flex items-start gap-3.5">
-            <div className={`p-3 rounded-xl shadow-sm ${
-              esRetiro ? 'bg-rose-600 text-white' : 'bg-indigo-600 text-white'
-            }`}>
-              {esRetiro ? <UserMinus size={22} /> : <ArrowRightLeft size={22} />}
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold uppercase tracking-wider ${
-                  esRetiro 
-                    ? 'bg-rose-100 text-rose-800 border border-rose-300' 
-                    : 'bg-indigo-100 text-indigo-800 border border-indigo-300'
-                }`}>
-                  {esRetiro ? 'Retiro Escolar' : 'Cambio de Curso'}
-                </span>
-                <span className="text-xs text-slate-500 font-medium">
-                  Año Escolar {matricula.anio_escolar}
-                </span>
-              </div>
-              <h3 className="text-lg font-bold text-slate-900 mt-1">
-                {esRetiro ? 'Motivo y Razones del Retiro' : 'Justificación de Traslado / Cambio de Curso'}
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden border border-gray-100 flex flex-col max-h-[92vh] animate-in fade-in zoom-in-95 duration-150">
+        
+        {/* ENCABEZADO MODAL */}
+        <div className="bg-gradient-to-r from-blue-900 via-blue-950 to-indigo-950 p-4 sm:p-5 text-white flex justify-between items-start relative shrink-0">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="p-1.5 bg-blue-800/80 rounded-lg text-blue-200">
+                <FileText size={18} />
+              </span>
+              <h3 className="font-extrabold text-lg sm:text-xl tracking-tight">
+                {tabActiva === 'retiro' ? 'Detalle de Motivo de Retiro' : 'Detalle de Cambio de Curso'}
               </h3>
-              <p className="text-xs text-slate-600">
-                {esRetiro 
-                  ? 'Consulta de la justificación formal y respuestas del apoderado registradas en el sistema.' 
-                  : 'Detalle de los motivos informados por el apoderado para el movimiento entre cursos.'}
-              </p>
             </div>
+            <p className="text-xs sm:text-sm text-blue-200 font-medium">
+              Información registrada en el Registro General de Matrículas (RGM)
+            </p>
           </div>
           <button 
-            type="button" 
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-white/80 rounded-lg transition-colors"
+            type="button"
+            onClick={onClose} 
+            className="text-blue-300 hover:text-white hover:bg-white/10 p-1.5 rounded-full transition-colors cursor-pointer"
             title="Cerrar ventana"
           >
             <X size={20} />
           </button>
         </div>
 
-        {/* CONTENIDO SCROLLABLE */}
-        <div className="p-6 overflow-y-auto space-y-5 text-sm">
-          {/* TARJETA RESUMEN DEL ESTUDIANTE */}
-          <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-            <div className="space-y-1">
-              <span className="text-slate-500 flex items-center gap-1 font-medium">
-                <User size={13} className="text-slate-400" /> Estudiante:
-              </span>
-              <p className="font-bold text-slate-900 text-sm">{matricula.estudiante_nombre}</p>
-              <p className="text-slate-600 font-mono">RUN / IPE: {matricula.estudiante_rut}</p>
-            </div>
-
-            <div className="space-y-1">
-              <span className="text-slate-500 flex items-center gap-1 font-medium">
-                <School size={13} className="text-slate-400" /> Curso y Folio:
-              </span>
-              <p className="font-bold text-blue-900 text-sm">
-                {matricula.curso} <span className="text-slate-500 font-normal text-xs">(Folio #{matricula.numero_correlativo})</span>
-              </p>
-              <p className="text-slate-600">RBD: {matricula.rbd}</p>
-            </div>
-
-            <div className="space-y-1 pt-2 border-t border-slate-200/60">
-              <span className="text-slate-500 flex items-center gap-1 font-medium">
-                <Calendar size={13} className="text-slate-400" /> 
-                {esRetiro ? 'Fecha Oficial de Retiro:' : 'Fecha Matrícula:'}
-              </span>
-              <p className="font-bold text-slate-800">
-                {esRetiro 
-                  ? (matricula.fecha_retiro || 'No informada') 
-                  : (matricula.fecha_matricula || 'No informada')}
-              </p>
-            </div>
-
-            <div className="space-y-1 pt-2 border-t border-slate-200/60">
-              <span className="text-slate-500 font-medium">Estado de la Matrícula:</span>
-              <div>
-                <span className={`inline-block px-2.5 py-0.5 rounded text-[11px] font-bold ${
-                  esRetiro
-                    ? 'bg-red-100 text-red-800 border border-red-200'
-                    : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                }`}>
-                  {matricula.estado}
-                </span>
-              </div>
-            </div>
+        {/* TABS DE SELECCIÓN SI AMBOS APLICAN */}
+        {datos && datos.retiro.aplica && datos.cambio_curso.aplica && (
+          <div className="flex border-b border-gray-200 bg-gray-50/80 px-4 pt-2 shrink-0 gap-2">
+            <button
+              type="button"
+              onClick={() => setTabActiva('retiro')}
+              className={`pb-2.5 px-3 text-xs sm:text-sm font-bold border-b-2 transition-all cursor-pointer flex items-center gap-1.5 ${
+                tabActiva === 'retiro'
+                  ? 'border-red-600 text-red-700 bg-white rounded-t-lg border-t border-x border-gray-200 shadow-xs'
+                  : 'border-transparent text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-red-500"></span>
+              Causa de Retiro
+            </button>
+            <button
+              type="button"
+              onClick={() => setTabActiva('cambio_curso')}
+              className={`pb-2.5 px-3 text-xs sm:text-sm font-bold border-b-2 transition-all cursor-pointer flex items-center gap-1.5 ${
+                tabActiva === 'cambio_curso'
+                  ? 'border-purple-600 text-purple-700 bg-white rounded-t-lg border-t border-x border-gray-200 shadow-xs'
+                  : 'border-transparent text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+              Cambio de Curso
+            </button>
           </div>
+        )}
 
-          {/* CASO A: RETIRO ESCOLAR */}
-          {esRetiro && (
-            <div className="space-y-4">
-              {/* CAUSA OFICIAL */}
-              <div className="p-3.5 bg-rose-50/70 border border-rose-200 rounded-xl space-y-1">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700 block">
-                  Causa Oficial Registrada
-                </span>
-                <p className="text-sm font-bold text-rose-950">
-                  {matricula.motivo_retiro || 'Retiro Administrativo'}
-                </p>
-              </div>
-
-              {/* MOTIVOS DE LA ENCUESTA */}
-              {parsedRetiro.motivos.length > 0 && (
-                <div className="space-y-2.5">
-                  <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-700">
-                    <CheckCircle2 size={15} className="text-amber-600" />
-                    <span>Razones informadas por el Apoderado:</span>
-                  </div>
-                  <div className="grid grid-cols-1 gap-2">
-                    {parsedRetiro.motivos.map((motivo, idx) => (
-                      <div 
-                        key={idx} 
-                        className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50/60 border border-amber-200/80 text-amber-950 text-xs font-semibold leading-relaxed shadow-xs"
-                      >
-                        <span className="w-2 h-2 rounded-full bg-amber-500 mt-1 shrink-0" />
-                        <span>{motivo}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* DETALLES O COMENTARIOS ADICIONALES DEL APODERADO */}
-              {parsedRetiro.detallesAdicionales && parsedRetiro.detallesAdicionales !== 'Sin comentarios adicionales.' && (
-                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
-                    <MessageSquareQuote size={15} className="text-slate-500" />
-                    <span>Comentarios adicionales del apoderado:</span>
-                  </div>
-                  <p className="text-xs text-slate-800 italic bg-white p-3 rounded-lg border border-slate-200 whitespace-pre-wrap leading-relaxed">
-                    "{parsedRetiro.detallesAdicionales}"
-                  </p>
-                </div>
-              )}
-
-              {/* SI NO HUBO MOTIVOS ESTRUCTURADOS PERO SÍ TEXTO CRUDO */}
-              {parsedRetiro.motivos.length === 0 && !parsedRetiro.detallesAdicionales && (
-                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
-                    <AlertCircle size={15} className="text-slate-500" />
-                    <span>Detalles del Retiro:</span>
-                  </div>
-                  <p className="text-xs text-slate-800 bg-white p-3 rounded-lg border border-slate-200 leading-relaxed whitespace-pre-wrap">
-                    {parsedRetiro.textoCrudo || 'El retiro se registró directamente sin cuestionario en línea o proviene de la carga masiva SIGE.'}
-                  </p>
-                </div>
-              )}
+        {/* CUERPO DEL MODAL (SCROLLABLE) */}
+        <div className="p-4 sm:p-6 overflow-y-auto space-y-4">
+          
+          {cargando && (
+            <div className="py-16 text-center space-y-3">
+              <Loader2 size={36} className="animate-spin text-blue-600 mx-auto" />
+              <p className="text-sm font-bold text-gray-600">Cargando motivos y trazabilidad...</p>
             </div>
           )}
 
-          {/* CASO B: CAMBIO DE CURSO */}
-          {!esRetiro && (
-            <div className="space-y-4">
-              {/* MOTIVOS DE TRASLADO */}
-              {parsedCambio.motivos.length > 0 && (
-                <div className="space-y-2.5">
-                  <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-700">
-                    <CheckCircle2 size={15} className="text-indigo-600" />
-                    <span>Razones informadas para el cambio de curso:</span>
-                  </div>
-                  <div className="grid grid-cols-1 gap-2">
-                    {parsedCambio.motivos.map((motivo, idx) => (
-                      <div 
-                        key={idx} 
-                        className="flex items-start gap-2.5 p-3 rounded-xl bg-indigo-50/60 border border-indigo-200/80 text-indigo-950 text-xs font-semibold leading-relaxed shadow-xs"
-                      >
-                        <span className="w-2 h-2 rounded-full bg-indigo-500 mt-1 shrink-0" />
-                        <span>{motivo}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* DETALLES O COMENTARIOS ADICIONALES */}
-              {parsedCambio.detallesAdicionales && parsedCambio.detallesAdicionales !== 'Sin comentarios adicionales.' && (
-                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
-                    <MessageSquareQuote size={15} className="text-slate-500" />
-                    <span>Comentarios adicionales del apoderado:</span>
-                  </div>
-                  <p className="text-xs text-slate-800 italic bg-white p-3 rounded-lg border border-slate-200 whitespace-pre-wrap leading-relaxed">
-                    "{parsedCambio.detallesAdicionales}"
-                  </p>
-                </div>
-              )}
-
-              {/* SI NO HUBO MOTIVOS ESTRUCTURADOS PERO SÍ TEXTO CRUDO */}
-              {parsedCambio.motivos.length === 0 && !parsedCambio.detallesAdicionales && (
-                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
-                    <FileText size={15} className="text-slate-500" />
-                    <span>Justificación registrada:</span>
-                  </div>
-                  <p className="text-xs text-slate-800 bg-white p-3 rounded-lg border border-slate-200 leading-relaxed whitespace-pre-wrap">
-                    {parsedCambio.textoCrudo || 'Sin justificación escrita registrada.'}
-                  </p>
-                </div>
-              )}
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-800 p-4 rounded-xl flex items-start gap-3">
+              <AlertCircle size={20} className="text-red-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold text-sm">No se pudo cargar la información</p>
+                <p className="text-xs mt-0.5">{error}</p>
+              </div>
             </div>
           )}
 
-          {/* OBSERVACIONES Y TRAZABILIDAD DEL SISTEMA */}
-          {matricula.observaciones && (
-            <div className="pt-2 border-t border-slate-200">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-1.5">
-                Trazabilidad / Observaciones del Sistema:
-              </span>
-              <div className="p-3 bg-slate-100/70 border border-slate-200 rounded-xl text-xs text-slate-700 font-mono whitespace-pre-wrap leading-relaxed">
-                {matricula.observaciones}
+          {datos && !cargando && !error && (
+            <>
+              {/* FICHA RESUMEN ESTUDIANTE */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Estudiante</span>
+                  <p className="font-extrabold text-slate-900 text-sm sm:text-base">{datos.estudiante.nombre_completo}</p>
+                  <p className="text-slate-600 font-semibold text-xs mt-0.5">
+                    RUT: <span className="font-mono">{datos.estudiante.rut}</span> • Curso: <span className="font-bold text-blue-900">{datos.estudiante.curso}</span> (Folio #{datos.numero_correlativo})
+                  </p>
+                </div>
+                <div className="text-right sm:text-right">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Establecimiento</span>
+                  <p className="font-bold text-slate-800 text-xs truncate max-w-xs">{datos.estudiante.establecimiento}</p>
+                  <p className="text-slate-500 text-[11px] font-medium">RBD: {datos.estudiante.rbd} • Año: {datos.anio_escolar}</p>
+                </div>
               </div>
-            </div>
+
+              {/* CONTENIDO TAB RETIRO */}
+              {tabActiva === 'retiro' && (
+                <div className="space-y-4">
+                  {/* METADATOS CLAVE */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="bg-red-50/70 border border-red-200/80 rounded-xl p-3">
+                      <span className="text-[10px] font-bold text-red-800 uppercase tracking-wider flex items-center gap-1">
+                        <Calendar size={13} className="text-red-600" />
+                        Fecha de Retiro Oficial
+                      </span>
+                      <p className="text-base font-extrabold text-red-950 mt-1">
+                        {datos.retiro.fecha_retiro || 'No especificada'}
+                      </p>
+                      {datos.retiro.tiene_encuesta && datos.retiro.fecha_encuesta && (
+                        <p className="text-[11px] text-red-700/90 font-medium mt-0.5">
+                          Encuesta completada el: {new Date(datos.retiro.fecha_encuesta).toLocaleString('es-CL')}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                      <span className="text-[10px] font-bold text-gray-600 uppercase tracking-wider block">
+                        Causa Administrativa / Estado
+                      </span>
+                      <p className="text-sm font-extrabold text-gray-900 mt-1">
+                        {datos.retiro.motivo_oficial}
+                      </p>
+                      <div className="mt-1">
+                        {datos.retiro.tiene_encuesta ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                            <CheckCircle2 size={12} />
+                            Encuesta Apoderado Validada
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
+                            Retiro Administrativo Directo
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* MOTIVOS SELECCIONADOS POR EL APODERADO */}
+                  {datos.retiro.motivos_seleccionados.length > 0 ? (
+                    <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-4">
+                      <h4 className="text-xs font-extrabold uppercase text-amber-900 tracking-wider mb-2.5 flex items-center gap-1.5">
+                        <ClipboardList size={16} className="text-amber-700" />
+                        Razones declaradas por el apoderado ({datos.retiro.motivos_seleccionados.length}):
+                      </h4>
+                      <ul className="space-y-2 text-xs sm:text-sm text-amber-950 font-medium">
+                        {datos.retiro.motivos_seleccionados.map((motivo, idx) => (
+                          <li key={idx} className="flex items-start gap-2 bg-white/70 p-2 rounded-lg border border-amber-100">
+                            <span className="text-amber-600 font-extrabold text-base leading-none">•</span>
+                            <span className="leading-snug">{motivo}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : (
+                    datos.retiro.motivo_oficial && datos.retiro.motivo_oficial !== 'Respuesta Apoderado (Confidencial)' && (
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5">
+                        <h4 className="text-xs font-bold uppercase text-slate-700 tracking-wider mb-1">
+                          Causa o Motivo Registrado:
+                        </h4>
+                        <p className="text-xs sm:text-sm text-slate-900 font-semibold">
+                          {datos.retiro.motivo_oficial}
+                        </p>
+                      </div>
+                    )
+                  )}
+
+                  {/* COMENTARIOS O DETALLES ADICIONALES */}
+                  {datos.retiro.detalle_adicional && (
+                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+                      <h4 className="text-xs font-bold uppercase text-gray-700 tracking-wider mb-1.5">
+                        Comentarios adicionales / Justificación detallada:
+                      </h4>
+                      <div className="bg-white p-3 rounded-lg border border-gray-100 text-xs sm:text-sm text-gray-800 italic whitespace-pre-wrap font-medium">
+                        "{datos.retiro.detalle_adicional}"
+                      </div>
+                    </div>
+                  )}
+
+                  {/* OBSERVACIONES / TRAZABILIDAD */}
+                  {datos.retiro.observaciones && (
+                    <div className="bg-slate-50/80 border border-slate-200 rounded-xl p-3.5">
+                      <h4 className="text-xs font-bold uppercase text-slate-600 tracking-wider mb-1 flex items-center gap-1">
+                        <ShieldAlert size={14} className="text-slate-500" />
+                        Trazabilidad y Observaciones de Auditoría:
+                      </h4>
+                      <p className="text-xs text-slate-700 font-mono leading-relaxed whitespace-pre-wrap bg-white p-2.5 rounded-lg border border-slate-200">
+                        {datos.retiro.observaciones}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* INFORMACIÓN DEL APODERADO */}
+                  <div className="bg-gray-50 border border-gray-200 rounded-xl p-3.5 text-xs text-gray-700">
+                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">
+                      Datos del Apoderado Titular
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1 font-medium">
+                      <div className="flex items-center gap-1.5">
+                        <User size={13} className="text-gray-400 shrink-0" />
+                        <span className="font-bold text-gray-900">{datos.apoderado.nombre_completo}</span>
+                        <span className="text-gray-500 font-mono">({datos.apoderado.rut})</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Mail size={13} className="text-gray-400 shrink-0" />
+                        <span>{datos.apoderado.correo}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* CONTENIDO TAB CAMBIO DE CURSO */}
+              {tabActiva === 'cambio_curso' && (
+                <div className="space-y-4">
+                  {/* TRANSICIÓN DE CURSO */}
+                  <div className="bg-gradient-to-r from-purple-50 via-purple-50/60 to-indigo-50 border border-purple-200 rounded-xl p-4 flex items-center justify-between gap-2 shadow-xs">
+                    <div className="text-left flex-1">
+                      <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wider block">Curso Anterior</span>
+                      <p className="text-sm sm:text-base font-extrabold text-purple-950 mt-0.5">
+                        {datos.cambio_curso.curso_anterior || 'No registrado'}
+                      </p>
+                      {datos.cambio_curso.folio_anterior ? (
+                        <span className="text-[11px] font-bold text-purple-600 bg-purple-100/70 px-2 py-0.5 rounded-md inline-block mt-0.5">
+                          Folio #{datos.cambio_curso.folio_anterior}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    <div className="flex items-center justify-center bg-purple-600 text-white w-9 h-9 rounded-full shrink-0 shadow-sm">
+                      <ArrowRight size={18} />
+                    </div>
+
+                    <div className="text-right flex-1">
+                      <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider block">Curso Actual (Destino)</span>
+                      <p className="text-sm sm:text-base font-extrabold text-indigo-950 mt-0.5">
+                        {datos.cambio_curso.curso_actual}
+                      </p>
+                      <span className="text-[11px] font-bold text-indigo-600 bg-indigo-100/70 px-2 py-0.5 rounded-md inline-block mt-0.5">
+                        Folio #{datos.numero_correlativo}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* MOTIVOS SELECCIONADOS */}
+                  {datos.cambio_curso.motivos_seleccionados.length > 0 ? (
+                    <div className="bg-purple-50/60 border border-purple-200 rounded-xl p-4">
+                      <h4 className="text-xs font-extrabold uppercase text-purple-900 tracking-wider mb-2.5 flex items-center gap-1.5">
+                        <ClipboardList size={16} className="text-purple-700" />
+                        Razones declaradas para el cambio de curso ({datos.cambio_curso.motivos_seleccionados.length}):
+                      </h4>
+                      <ul className="space-y-2 text-xs sm:text-sm text-purple-950 font-medium">
+                        {datos.cambio_curso.motivos_seleccionados.map((motivo, idx) => (
+                          <li key={idx} className="flex items-start gap-2 bg-white/70 p-2 rounded-lg border border-purple-100">
+                            <span className="text-purple-600 font-extrabold text-base leading-none">•</span>
+                            <span className="leading-snug">{motivo}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+
+                  {/* DETALLE ADICIONAL O MOTIVO CRUDO */}
+                  {datos.cambio_curso.detalle_adicional && (
+                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+                      <h4 className="text-xs font-bold uppercase text-gray-700 tracking-wider mb-1.5">
+                        Detalle / Justificación Registrada:
+                      </h4>
+                      <div className="bg-white p-3 rounded-lg border border-gray-100 text-xs sm:text-sm text-gray-800 font-medium italic whitespace-pre-wrap">
+                        "{datos.cambio_curso.detalle_adicional}"
+                      </div>
+                    </div>
+                  )}
+
+                  {/* OBSERVACIONES DEL CAMBIO */}
+                  {datos.cambio_curso.observaciones && (
+                    <div className="bg-slate-50/80 border border-slate-200 rounded-xl p-3.5">
+                      <h4 className="text-xs font-bold uppercase text-slate-600 tracking-wider mb-1 flex items-center gap-1">
+                        <ShieldAlert size={14} className="text-slate-500" />
+                        Trazabilidad Oficial del Traslado:
+                      </h4>
+                      <p className="text-xs text-slate-700 font-mono leading-relaxed whitespace-pre-wrap bg-white p-2.5 rounded-lg border border-slate-200">
+                        {datos.cambio_curso.observaciones}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* DATOS DEL APODERADO */}
+                  <div className="bg-gray-50 border border-gray-200 rounded-xl p-3.5 text-xs text-gray-700">
+                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">
+                      Apoderado Solicitante / Informante
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1 font-medium">
+                      <div className="flex items-center gap-1.5">
+                        <User size={13} className="text-gray-400 shrink-0" />
+                        <span className="font-bold text-gray-900">{datos.apoderado.nombre_completo}</span>
+                        <span className="text-gray-500 font-mono">({datos.apoderado.rut})</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Mail size={13} className="text-gray-400 shrink-0" />
+                        <span>{datos.apoderado.correo}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
-        {/* PIE DEL MODAL CON ACCIONES */}
-        <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
-          <div>
-            {esRetiro && onEmitirRetiro && (
+        {/* PIE DEL MODAL */}
+        <div className="bg-gray-50 px-4 sm:px-6 py-3.5 border-t border-gray-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2">
+            {datos && tabActiva === 'retiro' && onAbrirCertificado && (
               <button
                 type="button"
-                onClick={() => {
-                  onClose();
-                  onEmitirRetiro(matricula.id_matricula);
-                }}
-                className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"
-                title="Emitir Comprobante Oficial de Retiro"
+                onClick={() => onAbrirCertificado(datos.id_matricula, 'RETIRO')}
+                className="bg-red-50 text-red-700 border border-red-300 hover:bg-red-100 font-bold px-3 py-1.5 rounded-lg text-xs transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
               >
                 <FileText size={14} />
-                Emitir Cert. Retiro
+                Ver Certificado de Retiro
               </button>
             )}
 
-            {!esRetiro && matricula.ruta_documento_traslado && (
+            {datos && tabActiva === 'cambio_curso' && onAbrirCertificado && (
               <button
                 type="button"
-                onClick={() => {
-                  window.open(`${API_BASE_URL}/documentos/adjunto?tipo=traslado&id=${matricula.id_matricula}&token=${token}`, '_blank');
-                }}
-                className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"
-                title="Ver Certificado de Traslado Adjunto"
+                onClick={() => onAbrirCertificado(datos.id_matricula, 'CAMBIO_CURSO')}
+                className="bg-purple-50 text-purple-700 border border-purple-300 hover:bg-purple-100 font-bold px-3 py-1.5 rounded-lg text-xs transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
               >
-                <ExternalLink size={14} />
-                Ver Cert. Traslado PDF
+                <FileText size={14} />
+                Ver Comprobante de Traslado
               </button>
             )}
           </div>
@@ -360,14 +455,13 @@ export const ModalDetalleMotivo: React.FC<ModalDetalleMotivoProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+            className="bg-slate-700 hover:bg-slate-800 text-white font-bold px-4 py-1.5 rounded-lg text-xs transition-colors cursor-pointer ml-auto"
           >
             Cerrar
           </button>
         </div>
+
       </div>
     </div>
   );
-};
-
-export default ModalDetalleMotivo;
+}

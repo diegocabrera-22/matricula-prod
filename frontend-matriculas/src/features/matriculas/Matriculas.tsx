@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertOctagon, CheckCircle2, Users, ChevronDown, ChevronUp, AlertCircle, FileText } from 'lucide-react';
+import { AlertOctagon, CheckCircle2, Users, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
 import ModalEmisionDocumento from '../../components/ModalEmisionDocumento';
 import ModalDescargaExcel from './components/ModalDescargaExcel';
 import ModalDetalleMotivo from './components/ModalDetalleMotivo';
-import { useMatriculas, type Matricula } from './hooks/useMatriculas'; 
+import { useMatriculas } from './hooks/useMatriculas'; 
 import { API_BASE_URL } from '../../config/api';
 
 export default function Matriculas() {
@@ -39,13 +39,12 @@ export default function Matriculas() {
 
   const [mostrarListaDestino, setMostrarListaDestino] = useState(false);
   const [modalDetalleMotivoAbierto, setModalDetalleMotivoAbierto] = useState(false);
-  const [datosDetalleMotivo, setDatosDetalleMotivo] = useState<{
-    tipo: 'retiro' | 'cambio_curso';
-    matricula: Matricula;
-  } | null>(null);
+  const [idMatriculaDetalleMotivo, setIdMatriculaDetalleMotivo] = useState<number | null>(null);
+  const [modoDetalleMotivo, setModoDetalleMotivo] = useState<'retiro' | 'cambio_curso'>('retiro');
 
-  const abrirModalDetalleMotivo = (mat: Matricula, tipo: 'retiro' | 'cambio_curso') => {
-    setDatosDetalleMotivo({ tipo, matricula: mat });
+  const abrirModalDetalleMotivo = (id: number, modo: 'retiro' | 'cambio_curso') => {
+    setIdMatriculaDetalleMotivo(id);
+    setModoDetalleMotivo(modo);
     setModalDetalleMotivoAbierto(true);
   };
 
@@ -354,16 +353,11 @@ export default function Matriculas() {
                         <p className="text-xs text-gray-500">{mat.apoderado_rut}</p>
                     </td>
                     <td className="p-4">
-                        <div className="flex items-center gap-1.5 flex-wrap">
+                        <div className="flex items-center gap-1.5">
                           <p className="font-bold text-blue-800">{mat.curso}</p>
                           {mat.motivo_cambio_curso?.startsWith('PENDIENTE_TRASLADO') && (
                             <span className="px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded text-[10px] font-bold border border-purple-200" title={`Traslado solicitado hacia ${mat.motivo_cambio_curso.split('|')[2]}. En espera de justificación del apoderado.`}>
                               ⏳ Solicitud Traslado
-                            </span>
-                          )}
-                          {mat.motivo_cambio_curso && !mat.motivo_cambio_curso.startsWith('PENDIENTE_TRASLADO') && (
-                            <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-800 rounded text-[10px] font-bold border border-indigo-200" title="Estudiante trasladado de curso">
-                              Trasladado
                             </span>
                           )}
                         </div>
@@ -405,17 +399,6 @@ export default function Matriculas() {
                             Cert. Traslado
                           </button>
                         )}
-                        {mat.motivo_cambio_curso && !mat.motivo_cambio_curso.startsWith('PENDIENTE_TRASLADO') && (
-                          <button 
-                            type="button"
-                            onClick={() => abrirModalDetalleMotivo(mat, 'cambio_curso')}
-                            className="text-indigo-600 hover:text-indigo-800 font-semibold text-xs transition-colors underline cursor-pointer flex items-center gap-1"
-                            title="Ver justificación y motivos del cambio de curso"
-                          >
-                            <FileText size={12} />
-                            Motivo Traslado
-                          </button>
-                        )}
                         {mat.estado === 'Pendiente Retiro' && (
                           <a 
                             href={`/encuesta-retiro/${mat.id_matricula}`} 
@@ -443,21 +426,30 @@ export default function Matriculas() {
                             <button 
                               type="button"
                               onClick={() => abrirModalEmision(mat.id_matricula, 'RETIRO')} 
-                              className="text-red-600 hover:text-red-800 font-medium transition-colors text-xs"
+                              className="text-red-600 hover:text-red-800 font-medium transition-colors text-xs cursor-pointer"
                               title="Emitir Comprobante de Retiro"
                             >
                               Cert. Retiro
                             </button>
-                            <button 
+                            <button
                               type="button"
-                              onClick={() => abrirModalDetalleMotivo(mat, 'retiro')} 
-                              className="text-amber-700 hover:text-amber-900 font-semibold text-xs transition-colors underline cursor-pointer flex items-center gap-1"
-                              title="Ver motivos y razones del retiro"
+                              onClick={() => abrirModalDetalleMotivo(mat.id_matricula, 'retiro')}
+                              className="text-amber-700 hover:text-amber-900 font-semibold transition-colors text-xs cursor-pointer underline"
+                              title="Ver causa y motivos detallados del retiro"
                             >
-                              <FileText size={12} />
                               Motivo Retiro
                             </button>
                           </>
+                        )}
+                        {((mat.motivo_cambio_curso && !mat.motivo_cambio_curso.startsWith('PENDIENTE_TRASLADO')) || (mat.observaciones && mat.observaciones.toLowerCase().includes('traslado formalizado'))) && (
+                          <button
+                            type="button"
+                            onClick={() => abrirModalDetalleMotivo(mat.id_matricula, 'cambio_curso')}
+                            className="text-purple-700 hover:text-purple-900 font-semibold transition-colors text-xs cursor-pointer underline"
+                            title="Ver justificación y detalles del cambio de curso"
+                          >
+                            Motivo Traslado
+                          </button>
                         )}
                         {mat.estado === 'Activa' && (
                           <>
@@ -813,20 +805,21 @@ export default function Matriculas() {
         />
       )}
 
-      {modalDetalleMotivoAbierto && datosDetalleMotivo && (
-        <ModalDetalleMotivo
-          isOpen={modalDetalleMotivoAbierto}
-          onClose={() => setModalDetalleMotivoAbierto(false)}
-          tipo={datosDetalleMotivo.tipo}
-          matricula={datosDetalleMotivo.matricula}
-          onEmitirRetiro={(id) => abrirModalEmision(id, 'RETIRO')}
-        />
-      )}
-
       <ModalDescargaExcel
         abierto={modalExcelAbierto}
         onCerrar={() => setModalExcelAbierto(false)}
         colegioSeleccionado={colegioSeleccionado || ''}
+      />
+
+      <ModalDetalleMotivo
+        isOpen={modalDetalleMotivoAbierto}
+        onClose={() => setModalDetalleMotivoAbierto(false)}
+        idMatricula={idMatriculaDetalleMotivo}
+        modoInicial={modoDetalleMotivo}
+        onAbrirCertificado={(id, tipo) => {
+          setModalDetalleMotivoAbierto(false);
+          abrirModalEmision(id, tipo);
+        }}
       />
     </div>
   );

@@ -323,7 +323,7 @@ def obtener_ficha_estudiante_db(rut: str, usuario_actual: dict = None):
             
         cur.execute("""
             SELECT m.id_matricula, m.anio_escolar, m.nivel_ensenanza, m.curso, m.estado, m.fecha_matricula, m.observaciones,
-                   est.rbd, est.nombre, m.motivo_retiro, m.fecha_retiro, m.ruta_documento_traslado
+                   est.rbd, est.nombre, m.motivo_retiro, m.fecha_retiro, m.ruta_documento_traslado, m.motivo_cambio_curso
             FROM matricula m
             INNER JOIN establecimiento est ON m.id_establecimiento = est.id_establecimiento
             WHERE m.id_estudiante = %s 
@@ -405,6 +405,7 @@ def obtener_ficha_estudiante_db(rut: str, usuario_actual: dict = None):
                     "motivo_retiro": f[9],
                     "fecha_retiro": str(f[10]) if f[10] else None,
                     "ruta_documento_traslado": f[11],
+                    "motivo_cambio_curso": f[12],
                     "nivel_ensenanza": f[2]
                 } 
                 for f in historial_db

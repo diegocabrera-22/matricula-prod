@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useEstudiantes } from './hooks/useEstudiantes'; 
 import { API_BASE_URL } from '../../config/api';
+import ModalDetalleMotivo from '../matriculas/components/ModalDetalleMotivo';
 
 export default function Estudiantes() {
   const {
@@ -43,6 +44,15 @@ export default function Estudiantes() {
   // Estado para el historial RGM colapsable y detalles individuales por matrícula
   const [historialExpandido, setHistorialExpandido] = React.useState(false);
   const [detallesAbiertos, setDetallesAbiertos] = React.useState<Record<number, boolean>>({});
+  const [modalDetalleMotivoAbierto, setModalDetalleMotivoAbierto] = React.useState(false);
+  const [idMatriculaDetalleMotivo, setIdMatriculaDetalleMotivo] = React.useState<number | null>(null);
+  const [modoDetalleMotivo, setModoDetalleMotivo] = React.useState<'retiro' | 'cambio_curso'>('retiro');
+
+  const abrirModalDetalleMotivo = (id: number, modo: 'retiro' | 'cambio_curso') => {
+    setIdMatriculaDetalleMotivo(id);
+    setModoDetalleMotivo(modo);
+    setModalDetalleMotivoAbierto(true);
+  };
 
   const toggleDetalleMatricula = (id: number) => {
     setDetallesAbiertos(prev => ({ ...prev, [id]: !prev[id] }));
@@ -1108,9 +1118,38 @@ export default function Estudiantes() {
 
                                   {reg.motivo_retiro && (
                                     <div className="bg-red-50/60 p-2.5 rounded-lg border border-red-200 shadow-2xs">
-                                      <span className="text-[10px] uppercase font-bold text-red-500 block tracking-wider">Causa / Motivo del Retiro</span>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-[10px] uppercase font-bold text-red-500 block tracking-wider">Causa / Motivo del Retiro</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => abrirModalDetalleMotivo(reg.id, 'retiro')}
+                                          className="text-[11px] font-bold text-red-700 hover:text-red-900 underline cursor-pointer"
+                                          title="Ver razones y justificación de retiro"
+                                        >
+                                          Ver Razones
+                                        </button>
+                                      </div>
                                       <p className="font-semibold text-red-800 mt-0.5">
                                         {reg.motivo_retiro}
+                                      </p>
+                                    </div>
+                                  )}
+
+                                  {reg.motivo_cambio_curso && !reg.motivo_cambio_curso.startsWith('PENDIENTE_TRASLADO') && (
+                                    <div className="bg-purple-50/60 p-2.5 rounded-lg border border-purple-200 shadow-2xs">
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-[10px] uppercase font-bold text-purple-700 block tracking-wider">Cambio de Curso / Traslado</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => abrirModalDetalleMotivo(reg.id, 'cambio_curso')}
+                                          className="text-[11px] font-bold text-purple-700 hover:text-purple-900 underline cursor-pointer"
+                                          title="Ver justificación y detalles del cambio de curso"
+                                        >
+                                          Ver Justificación
+                                        </button>
+                                      </div>
+                                      <p className="font-semibold text-purple-900 mt-0.5 truncate">
+                                        {reg.motivo_cambio_curso}
                                       </p>
                                     </div>
                                   )}
@@ -1572,6 +1611,16 @@ export default function Estudiantes() {
         );
       })()}
 
+      <ModalDetalleMotivo
+        isOpen={modalDetalleMotivoAbierto}
+        onClose={() => setModalDetalleMotivoAbierto(false)}
+        idMatricula={idMatriculaDetalleMotivo}
+        modoInicial={modoDetalleMotivo}
+        onAbrirCertificado={(id, tipo) => {
+          const token = localStorage.getItem('token');
+          window.open(`${API_BASE_URL}/matriculas/${id}/certificado?tipo=${tipo}&token=${token}`, '_blank');
+        }}
+      />
     </div>
   );
 }

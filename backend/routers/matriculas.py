@@ -101,6 +101,14 @@ def descargar_certificado(id_matricula: int, tipo: str = "MATRICULA", usuario_ac
         headers={"Content-Disposition": f"inline; filename={tipo}_{rut_alumno}.pdf"}
     )
 
+@router.get("/{id_matricula}/detalle-motivo")
+def obtener_detalle_motivo(id_matricula: int, usuario_actual: dict = Depends(obtener_usuario_actual)):
+    """
+    Retorna el desglose de los motivos de retiro y/o cambio de curso de una matrícula,
+    incluyendo respuestas de encuestas confidenciales y observaciones de trazabilidad.
+    """
+    return matricula_service.obtener_detalle_motivo_matricula_db(id_matricula, usuario_actual)
+
 @router.post("/carga-masiva")
 async def carga_masiva_sige(
     archivos: List[UploadFile] = File(...), 
