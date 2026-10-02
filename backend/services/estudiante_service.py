@@ -20,43 +20,149 @@ def componer_domicilio(calle, numero, sector, comuna):
         partes.append(str(comuna).strip())
     return ", ".join(partes) if partes else None
 
-def obtener_estudiantes_db(establecimiento_id: int = None, rol: str = None):
+def verificar_acceso_estudiante_db(rut: str, usuario_actual: dict, cur):
+    if not usuario_actual:
+        return
+    rol = str(usuario_actual.get("rol", "")).strip()
+    es_global = rol.lower() in ["slep", "admin_slep", "visualizador_slep", "admin"]
+    if es_global:
+        return
+    id_est = usuario_actual.get("id_establecimiento")
+    if not id_est:
+        raise HTTPException(status_code=403, detail="No tiene un establecimiento asociado.")
+    
+    # En la red SLEP, los funcionarios autenticados con un colegio asignado
+    # tienen autorización para consultar la ficha, actualizar antecedentes de contacto
+    # e iniciar matrícula/traslado de postulantes sin matrícula o transferencias de otros colegios.
+    return True
+
+def obtener_estudiantes_db(
+    establecimiento_id: int = None,
+    q: str = None,
+    page: int = 1,
+    page_size: int = 50,
+    anio: int = None,
+    codigo: int = None,
+    curso: str = None,
+    estado: str = None
+):
+    page = max(1, int(page or 1))
+    page_size = min(max(1, int(page_size or 50)), 200)
+    offset = (page - 1) * page_size
+
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        query = """
-            SELECT e.id_estudiante, e.run_ipe, e.nombres, e.apellido_paterno, e.apellido_materno,
-                   m.estado, m.anio_escolar, m.cod_tipo_ensenanza, m.curso
-            FROM estudiante e
-            LEFT JOIN matricula m ON e.id_estudiante = m.id_estudiante
-            WHERE 1=1
-        """
-        parametros = []
-        if establecimiento_id is not None:
-            query += " AND m.id_establecimiento = %s"
-            parametros.append(establecimiento_id)
-            
-        query += " ORDER BY e.apellido_paterno ASC, m.anio_escolar DESC"
+        where_clauses = ["1=1"]
+        params = []
 
-        cur.execute(query, tuple(parametros))
+        if establecimiento_id is not None:
+            where_clauses.append("m.id_establecimiento = %s")
+            params.append(establecimiento_id)
+
+        if anio is not None:
+            where_clauses.append("m.anio_escolar = %s")
+            params.append(anio)
+
+        if codigo is not None:
+            where_clauses.append("m.cod_tipo_ensenanza = %s")
+            params.append(codigo)
+
+        if curso:
+            where_clauses.append("m.curso = %s")
+            params.append(curso)
+
+        if estado:
+            where_clauses.append("m.estado = %s")
+            params.append(estado)
+
+        if q and q.strip():
+            termino = q.strip()
+            t_clean = termino.replace(".", "").replace("-", "").replace(" ", "").upper()
+            palabras = [p for p in termino.split() if len(p) > 1]
+            if palabras:
+                name_conditions = []
+                for p in palabras:
+                    name_conditions.append("UPPER(CONCAT(e.nombres, ' ', e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''))) LIKE UPPER(%s)")
+                    params.append(f"%{p}%")
+                where_clauses.append(f"""(
+                    REPLACE(REPLACE(REPLACE(UPPER(e.run_ipe), '.', ''), '-', ''), ' ', '') LIKE %s
+                    OR e.run_ipe ILIKE %s
+                    OR ({' AND '.join(name_conditions)})
+                )""")
+                params.insert(len(params) - len(palabras), f"%{t_clean}%")
+                params.insert(len(params) - len(palabras), f"%{termino}%")
+            else:
+                where_clauses.append("(REPLACE(REPLACE(REPLACE(UPPER(e.run_ipe), '.', ''), '-', ''), ' ', '') LIKE %s OR e.run_ipe ILIKE %s)")
+                params.append(f"%{t_clean}%")
+                params.append(f"%{termino}%")
+
+        where_sql = " AND ".join(where_clauses)
+
+        # Conteo total para paginación
+        count_sql = f"""
+            WITH ultimas_matriculas AS (
+                SELECT DISTINCT ON (m.id_estudiante)
+                    m.id_estudiante, m.id_establecimiento, m.estado, m.anio_escolar, m.cod_tipo_ensenanza, m.curso
+                FROM matricula m
+                ORDER BY m.id_estudiante, m.anio_escolar DESC NULLS LAST, m.id_matricula DESC
+            )
+            SELECT COUNT(DISTINCT e.id_estudiante)
+            FROM estudiante e
+            LEFT JOIN ultimas_matriculas m ON e.id_estudiante = m.id_estudiante
+            WHERE {where_sql}
+        """
+        cur.execute(count_sql, tuple(params))
+        total = cur.fetchone()[0]
+
+        # Consulta paginada con LIMIT y OFFSET
+        data_sql = f"""
+            WITH ultimas_matriculas AS (
+                SELECT DISTINCT ON (m.id_estudiante)
+                    m.id_estudiante, m.id_establecimiento, m.estado, m.anio_escolar, m.cod_tipo_ensenanza, m.curso
+                FROM matricula m
+                ORDER BY m.id_estudiante, m.anio_escolar DESC NULLS LAST, m.id_matricula DESC
+            )
+            SELECT e.id_estudiante, e.run_ipe, e.nombres, e.apellido_paterno, e.apellido_materno,
+                   m.estado, m.anio_escolar, m.cod_tipo_ensenanza, m.curso,
+                   est.nombre as nombre_colegio
+            FROM estudiante e
+            LEFT JOIN ultimas_matriculas m ON e.id_estudiante = m.id_estudiante
+            LEFT JOIN establecimiento est ON m.id_establecimiento = est.id_establecimiento
+            WHERE {where_sql}
+            ORDER BY e.apellido_paterno ASC, e.nombres ASC
+            LIMIT %s OFFSET %s
+        """
+        params_paged = list(params) + [page_size, offset]
+        cur.execute(data_sql, tuple(params_paged))
         filas = cur.fetchall()
-        
+
         estudiantes = [{
-            "id": f[0], 
-            "run": f[1], 
+            "id": f[0],
+            "id_estudiante": f[0],
+            "run": f[1],
             "nombres": f[2],
             "apellido_paterno": f[3],
             "apellido_materno": f[4] or "",
             "nombre_completo": f"{f[2]} {f[3]} {f[4] or ''}".strip(),
             "estado": f[5] or "Sin Matrícula",
             "anio_escolar": f[6],
+            "anio": f[6],
             "cod_tipo_ensenanza": f[7],
-            "curso": f[8] or "Sin Curso"
+            "curso": f[8] or "Sin Curso",
+            "nombre_colegio": f[9] or "Sin establecimiento"
         } for f in filas]
-        
-        return estudiantes
+
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+        return {
+            "estudiantes": estudiantes,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages
+        }
     except Exception as e:
-        print(f"Error BD: {e}")
+        print(f"Error BD en obtener_estudiantes_db: {e}")
         raise HTTPException(status_code=500, detail="Error interno de la base de datos")
     finally:
         cur.close()
@@ -86,7 +192,7 @@ def buscar_estudiantes_db(termino: str, establecimiento_id: int = None, limite: 
 
         est_filter = ""
         if establecimiento_id is not None:
-            est_filter = " AND m.id_establecimiento = %s"
+            est_filter = " AND (m.id_establecimiento = %s OR m.id_matricula IS NULL)"
             params_unaccent.append(establecimiento_id)
 
         # Priorizar coincidencias directas en el nombre
@@ -131,7 +237,7 @@ def buscar_estudiantes_db(termino: str, establecimiento_id: int = None, limite: 
             name_clause_fb = " AND ".join(name_conds_fb) if name_conds_fb else "1=0"
 
             if establecimiento_id is not None:
-                est_filter_fb = " AND m.id_establecimiento = %s"
+                est_filter_fb = " AND (m.id_establecimiento = %s OR m.id_matricula IS NULL)"
                 params_fallback.append(establecimiento_id)
             else:
                 est_filter_fb = ""
@@ -186,10 +292,13 @@ def buscar_estudiantes_db(termino: str, establecimiento_id: int = None, limite: 
         cur.close()
         conn.close()
 
-def obtener_ficha_estudiante_db(rut: str):
+def obtener_ficha_estudiante_db(rut: str, usuario_actual: dict = None):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        if usuario_actual:
+            verificar_acceso_estudiante_db(rut, usuario_actual, cur)
+
         cur.execute("""
             SELECT e.id_estudiante, e.run_ipe, e.nombres, e.apellido_paterno, e.apellido_materno, e.fecha_nacimiento, e.domicilio,
                    a.rut_pasaporte, a.nombres, a.apellido_paterno, a.apellido_materno, a.telefono, a.correo_electronico, a.domicilio, a.relacion_estudiante, a.ruta_documento_tutor,
@@ -214,7 +323,7 @@ def obtener_ficha_estudiante_db(rut: str):
             
         cur.execute("""
             SELECT m.id_matricula, m.anio_escolar, m.nivel_ensenanza, m.curso, m.estado, m.fecha_matricula, m.observaciones,
-                   est.rbd, est.nombre
+                   est.rbd, est.nombre, m.motivo_retiro, m.fecha_retiro, m.ruta_documento_traslado
             FROM matricula m
             INNER JOIN establecimiento est ON m.id_establecimiento = est.id_establecimiento
             WHERE m.id_estudiante = %s 
@@ -223,8 +332,9 @@ def obtener_ficha_estudiante_db(rut: str):
         
         historial_db = cur.fetchall()
         
-        ultimo_rbd = historial_db[0][7] if historial_db else "Sin Registro"
-        ultimo_colegio = historial_db[0][8] if historial_db else "Sin Registro"
+        mat_activa = next((h for h in historial_db if h[4] in ('Activa', 'Promovido', 'Repitente')), historial_db[0] if historial_db else None)
+        ultimo_rbd = mat_activa[7] if mat_activa else "Sin Registro"
+        ultimo_colegio = mat_activa[8] if mat_activa else "Sin Registro"
 
         respuesta = {
             "personal": {
@@ -290,7 +400,12 @@ def obtener_ficha_estudiante_db(rut: str):
                     "id": f[0], "anio": f[1], 
                     "establecimiento": f[8], "rbd": f[7], 
                     "curso": f[3], "estado": f[4], 
-                    "tipo_movimiento": "Matrícula", "observaciones": f[6] or "Sin observaciones."
+                    "tipo_movimiento": "Matrícula", "observaciones": f[6] or "Sin observaciones.",
+                    "fecha_matricula": str(f[5]) if f[5] else None,
+                    "motivo_retiro": f[9],
+                    "fecha_retiro": str(f[10]) if f[10] else None,
+                    "ruta_documento_traslado": f[11],
+                    "nivel_ensenanza": f[2]
                 } 
                 for f in historial_db
             ]
@@ -435,14 +550,14 @@ def crear_estudiante_db(payload: dict):
                       payload.get("relacion_suplente") or "Suplente"))
                 id_suplente = cur.fetchone()[0]
 
-        # 3. Insertar Estudiante con ambas referencias
+        # 3. Insertar Estudiante con ambas referencias y fecha de actualización vigente
         cur.execute("""
             INSERT INTO estudiante (
                 run_ipe, nombres, apellido_paterno, apellido_materno, fecha_nacimiento, sexo, 
                 domicilio, latitud, longitud, id_apoderado_principal, id_apoderado_suplente, 
-                pais_origen, documento_extranjero
+                pais_origen, documento_extranjero, fecha_actualizacion
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id_estudiante
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP) RETURNING id_estudiante
         """, (payload.get("run"), payload.get("nombres"), payload.get("apellido_paterno"), payload.get("apellido_materno"), 
               payload.get("fecha_nacimiento"), payload.get("sexo"), payload.get("domicilio"), 
               payload.get("latitud"), payload.get("longitud"), id_apoderado, id_suplente,
@@ -454,9 +569,10 @@ def crear_estudiante_db(payload: dict):
         cur.execute("""
             INSERT INTO ficha_salud (
                 id_estudiante, sistema_salud, letra_fonasa, cesfam, centro_emergencia,
-                alergias, diagnostico_medico, medico_tratante, medicamento, nee, nee_tipo
+                alergias, diagnostico_medico, medico_tratante, medicamento, nee, nee_tipo,
+                fecha_actualizacion
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
             ON CONFLICT (id_estudiante) DO UPDATE SET
                 sistema_salud = EXCLUDED.sistema_salud,
                 letra_fonasa = EXCLUDED.letra_fonasa,
@@ -555,10 +671,13 @@ def _registrar_auditoria_estudiante(cur, rut, id_usuario, dir_anterior, dir_nuev
     )
 
 
-def actualizar_datos_estudiante_db(rut: str, req, id_usuario: int): 
+def actualizar_datos_estudiante_db(rut: str, req, id_usuario: int, usuario_actual: dict = None): 
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        if usuario_actual:
+            verificar_acceso_estudiante_db(rut, usuario_actual, cur)
+
         # 1. Obtener estudiante existente y valores anteriores para auditoría
         cur.execute("""
             SELECT id_estudiante, id_apoderado_principal, id_apoderado_suplente,
@@ -762,4 +881,4 @@ def actualizar_datos_estudiante_db(rut: str, req, id_usuario: int):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         cur.close()
-        conn.close()
+        conn.close()

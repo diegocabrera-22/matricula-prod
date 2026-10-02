@@ -3,6 +3,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useLocation, useOutletContext } from 'react-router-dom';
 import { API_BASE_URL } from '../../../config/api';
 import { coincideBusqueda } from '../../../utils/search';
+import { useToast } from '../../../components/Toast';
+import { obtenerRangoCurso } from '../../../utils/gradeHierarchy';
 
 export interface MatriculaBase {
   id_establecimiento: number;
@@ -16,6 +18,7 @@ export interface MatriculaBase {
 }
 
 export const useNuevaMatricula = () => {
+  const { toast } = useToast();
   const navigate = useNavigate();
   const location = useLocation(); 
   
@@ -32,8 +35,16 @@ export const useNuevaMatricula = () => {
   const [pasoActual, setPasoActual] = useState(1);
   const irSiguientePaso = () => {
     if (pasoActual === 1 && (!estudiante || !fichaConfirmada)) {
-      alert("Es obligatorio actualizar y confirmar los antecedentes del estudiante y su apoderado antes de continuar.");
+      toast.warning("Es obligatorio actualizar y confirmar los antecedentes del estudiante y su apoderado antes de continuar.");
       return;
+    }
+    if (pasoActual === 2) {
+      const rankPrev = obtenerRangoCurso(cursoPrevio);
+      const rankDest = obtenerRangoCurso(formulario.cursoSeleccionado);
+      if (rankPrev > 0 && rankDest > 0 && rankDest < rankPrev) {
+        toast.error(`No está permitido matricular al estudiante en un curso inferior al ya cursado (${cursoPrevio} ➜ ${formulario.cursoSeleccionado}).`);
+        return;
+      }
     }
     setPasoActual(prev => prev + 1);
   };
@@ -157,6 +168,7 @@ export const useNuevaMatricula = () => {
   const [todasLasMatriculas, setTodasLasMatriculas] = useState<MatriculaBase[]>([]);
 
   const [archivoResolucion, setArchivoResolucion] = useState<File | null>(null);
+  const [archivoTraslado, setArchivoTraslado] = useState<File | null>(null);
   
   const [formulario, setFormulario] = useState({
     id_establecimiento: '',
@@ -336,6 +348,7 @@ export const useNuevaMatricula = () => {
         })
         .catch(err => {
           console.error("Error preseleccionando estudiante:", err);
+          setError("No se pudo cargar la información del estudiante recién registrado: " + err.message);
           setCargandoPreseleccion(false);
         });
     }
@@ -844,8 +857,9 @@ export const useNuevaMatricula = () => {
       setMensajeAntiguedad("Información recién actualizada y confirmada con éxito.");
       setModalFaltantes(false);
       
+      toast.success("Ficha del estudiante actualizada y confirmada exitosamente.");
     } catch (err: any) {
-      alert("Error al actualizar la ficha: " + err.message);
+      toast.error("Error al actualizar la ficha: " + err.message);
     } finally {
       setGuardandoFaltantes(false);
     }
@@ -890,9 +904,10 @@ export const useNuevaMatricula = () => {
       
       linkDescarga.remove();
       window.URL.revokeObjectURL(url);
+      toast.success("Documentos descargados exitosamente.");
       
     } catch (err: any) {
-      alert("Hubo un error al descargar los documentos: " + err.message);
+      toast.error("Hubo un error al descargar los documentos: " + err.message);
       console.error(err);
     }
   };
@@ -900,6 +915,13 @@ export const useNuevaMatricula = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!estudiante || !fichaConfirmada) return;
+
+    const rankPrev = obtenerRangoCurso(cursoPrevio);
+    const rankDest = obtenerRangoCurso(formulario.cursoSeleccionado);
+    if (rankPrev > 0 && rankDest > 0 && rankDest < rankPrev) {
+      toast.error(`No está permitido matricular al estudiante en un curso inferior al ya cursado (${cursoPrevio} ➜ ${formulario.cursoSeleccionado}).`);
+      return;
+    }
 
     setCargando(true);
     setError('');
@@ -966,6 +988,21 @@ export const useNuevaMatricula = () => {
         }
       }
 
+      // Si adjuntó archivo de certificado de traslado, subirlo al almacenamiento
+      if (archivoTraslado && datos.id_matricula) {
+        try {
+          const formArchivo = new FormData();
+          formArchivo.append('archivo', archivoTraslado);
+          await fetch(`${API_BASE_URL}/matriculas/${datos.id_matricula}/documento-traslado`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formArchivo
+          });
+        } catch (uploadErr) {
+          console.warn("Advertencia al subir certificado de traslado:", uploadErr);
+        }
+      }
+
       setMatriculaExitosa(true);
 
     } catch (err: any) {
@@ -987,35 +1024,44 @@ export const useNuevaMatricula = () => {
       alertas.push({texto: `Cambio de Plan de Estudio (de Cod. ${codigoPrevio} a Cod. ${formulario.cod_tipo_ensenanza}).`, tipo: 'alerta'});
     }
 
-    const numPrevioMatch = cursoPrevio.match(/\d+/);
-    const numDestinoMatch = formulario.cursoSeleccionado.match(/\d+/);
+    const rankPrevio = obtenerRangoCurso(cursoPrevio);
+    const rankDestino = obtenerRangoCurso(formulario.cursoSeleccionado);
 
-    if (numPrevioMatch && numDestinoMatch) {
-      const numPrevio = parseInt(numPrevioMatch[0]);
-      const numDestino = parseInt(numDestinoMatch[0]);
-
-      if (numDestino === numPrevio + 1) {
-        alertas.push({texto: `Promoción: El estudiante avanza al curso siguiente (de ${numPrevio} a ${numDestino}).`, tipo: 'info'});
-      } else if (numDestino === numPrevio) {
-        alertas.push({texto: `Repitencia: El estudiante mantiene el mismo nivel cursado (${numPrevio}).`, tipo: 'alerta'});
-      } else if (numDestino < numPrevio) {
-        alertas.push({texto: `Retroceso abrupto: Está matriculando al estudiante en un grado INFERIOR al que ya cursó (de ${numPrevio} a ${numDestino}).`, tipo: 'peligro'});
-      } else if (numDestino > numPrevio + 1) {
-        alertas.push({texto: `Salto abrupto: Está adelantando al estudiante múltiples grados (de ${numPrevio} a ${numDestino}).`, tipo: 'peligro'});
+    if (rankPrevio > 0 && rankDestino > 0) {
+      if (rankDestino < rankPrevio) {
+        alertas.push({
+          texto: `⛔ BLOQUEO POR REGLA EDUCATIVA: No está permitido matricular al estudiante en un curso inferior al ya cursado. El estudiante ya cursó '${cursoPrevio}', por lo que no puede ser matriculado en '${formulario.cursoSeleccionado}'.`,
+          tipo: 'peligro'
+        });
+      } else if (rankDestino === rankPrevio) {
+        alertas.push({
+          texto: `🔄 Alumno Repitente: El estudiante cursará nuevamente el nivel '${cursoPrevio}' para el año escolar ${formulario.anio_escolar}.`,
+          tipo: 'alerta'
+        });
+      } else if (rankDestino === rankPrevio + 1) {
+        alertas.push({
+          texto: `🎓 Promoción Escolar: El estudiante avanza exitosamente de '${cursoPrevio}' a '${formulario.cursoSeleccionado}'.`,
+          tipo: 'info'
+        });
+      } else if (rankDestino > rankPrevio + 1) {
+        alertas.push({
+          texto: `⚠️ Salto de nivel: El estudiante está avanzando más de un grado escolar (de '${cursoPrevio}' a '${formulario.cursoSeleccionado}'). Verifique que cuente con convalidación o exámenes libres acreditados.`,
+          tipo: 'alerta'
+        });
       }
     } else {
       const basePrevio = cursoPrevio.replace(/\s*[A-Z]\s*$/i, '').trim().toLowerCase();
       const baseDestino = formulario.cursoSeleccionado.replace(/\s*[A-Z]\s*$/i, '').trim().toLowerCase();
       
       if (basePrevio === baseDestino) {
-        alertas.push({texto: `Repitencia: El estudiante se mantiene en el nivel '${cursoPrevio}'.`, tipo: 'alerta'});
+        alertas.push({texto: `🔄 Repitencia: El estudiante se mantiene en el nivel '${cursoPrevio}'.`, tipo: 'alerta'});
       } else {
-        alertas.push({texto: `Transición de nivel preescolar: de '${cursoPrevio}' a '${formulario.cursoSeleccionado}'.`, tipo: 'info'});
+        alertas.push({texto: `Transición de nivel: de '${cursoPrevio}' a '${formulario.cursoSeleccionado}'.`, tipo: 'info'});
       }
     }
 
     setAlertasTransicion(alertas);
-  }, [formulario.cursoSeleccionado, formulario.cod_tipo_ensenanza, cursoPrevio, codigoPrevio, estudiante]);
+  }, [formulario.cursoSeleccionado, formulario.cod_tipo_ensenanza, formulario.anio_escolar, cursoPrevio, codigoPrevio, estudiante]);
 
   return {
     navigate, cargando, error, rutBusqueda, setRutBusqueda, estudiante, setEstudiante,
@@ -1026,6 +1072,7 @@ export const useNuevaMatricula = () => {
     establecimientosDb, formulario, checkCertNotas, setCheckCertNotas, checkCertRetiro, setCheckCertRetiro,
     idEstablecimientoPrevio, codigosDisponibles, cursosDisponibles, 
     archivoResolucion, setArchivoResolucion, 
+    archivoTraslado, setArchivoTraslado,
     pasoActual, irSiguientePaso, irPasoAnterior,
     seleccionarCurso, handleEscribirBuscador, seleccionarEstudiante, guardarDatosFaltantes, copiarDomicilio, handleChange, generarComprobantePDF, handleSubmit, setCursoPrevio, setCodigoPrevio, setIdEstablecimientoPrevio,
     esColegioEMTP, cuposOcupados, limiteCupos, estudianteCompleto,
